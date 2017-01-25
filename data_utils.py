@@ -1,8 +1,25 @@
+"""Data utilities."""
 import os
 import torch
-import torchtext
 from torch.autograd import Variable
 import operator
+import json
+
+
+def hyperparam_string(config):
+    """Hyerparam string."""
+    model = config['model']
+    exp_name = 'model'
+    for k, v in model.items():
+        exp_name += '__' + k + '_' + str(v)
+
+    return exp_name
+
+
+def read_config(file_path):
+    """Read JSON config."""
+    json_object = json.load(open(file_path, 'r'))
+    return json_object
 
 
 def construct_vocab(lines, vocab_size):
@@ -46,10 +63,10 @@ def construct_vocab(lines, vocab_size):
     return word2id, id2word
 
 
-def read_nmt_data(base_dir, src, trg):
+def read_nmt_data(src, trg):
     """Read data from files."""
-    src_lines = [line.strip().split() for line in open(os.path.join(base_dir, src))]
-    trg_lines = [line.strip().split() for line in open(os.path.join(base_dir, trg))]
+    src_lines = [line.strip().split() for line in open(src, 'r')]
+    trg_lines = [line.strip().split() for line in open(trg, 'r')]
 
     print 'Constructing vocabulary ...'
     src_word2id, src_id2word = construct_vocab(src_lines, 30000)
@@ -61,11 +78,8 @@ def read_nmt_data(base_dir, src, trg):
     return src, trg
 
 
-def get_minibatch(data_dict, index, batch_size, max_len, add_start=True, add_end=True):
+def get_minibatch(lines, word2ind, index, batch_size, max_len, add_start=True, add_end=True):
     """Prepare minibatch."""
-    lines = data_dict['data']
-    word2ind = data_dict['word2id']
-
     if add_start and add_end:
         lines = [
             ['<s>'] + line + ['</s>']
@@ -113,32 +127,3 @@ def get_minibatch(data_dict, index, batch_size, max_len, add_start=True, add_end
     mask = Variable(torch.LongTensor(mask)).cuda()
 
     return input_lines, output_lines, lens, mask
-
-
-def get_data():
-
-    src = torchtext.data.Field()
-    trg = torchtext.data.Field()
-
-    mt_train = torchtext.datasets.TranslationDataset(
-        path='/Tmp/subramas/nmt-pytorch/en-zh/train/',
-        exts=('cmu-mthomework.train.unk.en', 'cmu-mthomework.train.unk.zh'),
-        fields=(src, trg)
-    )
-    mt_dev = torchtext.datasets.TranslationDataset(
-        path='/Tmp/subramas/nmt-pytorch/en-zh/dev/',
-        exts=('cmu-mthomework.dev.unk.en', 'cmu-mthomework.dev.unk.zh'),
-        fields=(src, trg)
-    )
-
-    src.build_vocab(mt_train, max_size=30000)
-    trg.build_vocab(mt_train, max_size=30000)
-
-    train_iter = torchtext.data.BucketIterator(
-        mt_train,
-        batch_size=32,
-        sort_key=lambda x: torchtext.data.interleave_keys(len(x.src), len(x.trg)),
-        repeat=False,
-    )
-
-    return train_iter, mt_train, mt_dev, src, trg

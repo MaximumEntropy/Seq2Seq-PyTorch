@@ -35,6 +35,11 @@ class LSTMAttention(RNNCellBase):
         self.input_bias_1 = nn.Parameter(torch.Tensor(4 * hidden_size))
         self.hidden_bias_1 = nn.Parameter(torch.Tensor(4 * hidden_size))
 
+        self.input_weights_2 = nn.Parameter(torch.Tensor(4 * hidden_size, context_size))
+        self.hidden_weights_2 = nn.Parameter(torch.Tensor(4 * hidden_size, hidden_size))
+        self.input_bias_2 = nn.Parameter(torch.Tensor(4 * hidden_size))
+        self.hidden_bias_2 = nn.Parameter(torch.Tensor(4 * hidden_size))
+
         self.context2attention = nn.Parameter(torch.Tensor(context_size, context_size))
         self.bias_context2attention = nn.Parameter(torch.Tensor(context_size))
 
@@ -43,7 +48,6 @@ class LSTMAttention(RNNCellBase):
         self.input2attention = nn.Parameter(torch.Tensor(input_size, context_size))
 
         self.recurrent2attention = nn.Parameter(torch.Tensor(context_size, 1))
-        self.weighted_context2hidden = nn.Parameter(torch.Tensor(4 * hidden_size, context_size))
 
         self.reset_parameters()
 
@@ -57,6 +61,11 @@ class LSTMAttention(RNNCellBase):
         self.input_bias_1.data.fill_(0)
         self.hidden_bias_1.data.fill_(0)
 
+        self.input_weights_2.data.uniform_(-stdv_ctx, stdv_ctx)
+        self.hidden_weights_2.data.uniform_(-stdv, stdv)
+        self.input_bias_2.data.fill_(0)
+        self.hidden_bias_2.data.fill_(0)
+
         self.context2attention.data.uniform_(-stdv_ctx, stdv_ctx)
         self.bias_context2attention.data.fill_(0)
 
@@ -64,7 +73,6 @@ class LSTMAttention(RNNCellBase):
         self.input2attention.data.uniform_(-stdv_ctx, stdv_ctx)
 
         self.recurrent2attention.data.uniform_(-stdv_ctx, stdv_ctx)
-        self.weighted_context2hidden.data.uniform_(-stdv, stdv)
 
     def forward(self, input, hidden, ctx, ctx_mask=None):
         """Propogate input through the network."""
@@ -72,10 +80,23 @@ class LSTMAttention(RNNCellBase):
             """Recurrence helper."""
             hx, cx = hidden  # n_b x hidden_dim
 
+            gates = F.linear(
+                input, self.input_weights_1, self.input_bias_1
+            ) + F.linear(hx, self.hidden_weights_1, self.hidden_bias_1)
+            ingate, forgetgate, cellgate, outgate = gates.chunk(4, 1)
+
+            ingate = F.sigmoid(ingate)
+            forgetgate = F.sigmoid(forgetgate)
+            cellgate = F.tanh(cellgate)
+            outgate = F.sigmoid(outgate)
+
+            cy = (forgetgate * cx) + (ingate * cellgate)
+            hy = outgate * F.tanh(cy)  # n_b x hidden_dim
+
             # Attention mechanism
 
             # Project current hidden state to context size
-            hidden_ctx = F.linear(hx, self.hidden2attention)
+            hidden_ctx = F.linear(hy, self.hidden2attention)
             # print 'Hidden context', hidden_ctx.size()
 
             # Added projected hidden state to each projected context
@@ -91,8 +112,6 @@ class LSTMAttention(RNNCellBase):
             # Non-linearity
             hidden_ctx_sum = F.tanh(hidden_ctx_sum)
 
-            # print 'Summed context with hidden state with projected input ', hidden_ctx_sum.size()
-
             # Compute alignments
             alpha = torch.bmm(
                 hidden_ctx_sum,
@@ -103,16 +122,13 @@ class LSTMAttention(RNNCellBase):
                 )
             ).squeeze().t()
             alpha = F.softmax(alpha).t()
-            # print 'Alpha', alpha.size()
-            weighted_context = torch.mul(projected_ctx, alpha.unsqueeze(2).expand(
-                projected_ctx.size()
-            )).sum(0).squeeze()
-            # print 'Weighted context', weighted_context.size()
-            context_hidden = F.linear(weighted_context, self.weighted_context2hidden)
-            # print 'Context_hidden', context_hidden.size()
-            gates = F.linear(input, self.input_weights_1, self.input_bias_1) + \
-                F.linear(hx, self.hidden_weights_1, self.hidden_bias_1) + \
-                context_hidden
+            weighted_context = torch.mul(
+                projected_ctx, alpha.unsqueeze(2).expand(projected_ctx.size())
+            ).sum(0).squeeze()
+
+            gates = F.linear(
+                weighted_context, self.input_weights_2, self.input_bias_2
+            ) + F.linear(hy, self.hidden_weights_2, self.hidden_bias_2)
             ingate, forgetgate, cellgate, outgate = gates.chunk(4, 1)
 
             ingate = F.sigmoid(ingate)
@@ -120,7 +136,7 @@ class LSTMAttention(RNNCellBase):
             cellgate = F.tanh(cellgate)
             outgate = F.sigmoid(outgate)
 
-            cy = (forgetgate * cx) + (ingate * cellgate)
+            cy = (forgetgate * cy) + (ingate * cellgate)
             hy = outgate * F.tanh(cy)  # n_b x hidden_dim
 
             return hy, cy
@@ -149,7 +165,9 @@ class LSTMAttention(RNNCellBase):
         output = []
         steps = range(input.size(0))
         for i in steps:
-            hidden = recurrence(input[i], hidden, projected_input[i], projected_ctx)
+            hidden = recurrence(
+                input[i], hidden, projected_input[i], projected_ctx
+            )
             output.append(isinstance(hidden, tuple) and hidden[0] or hidden)
 
         output = torch.cat(output, 0).view(input.size(0), *output[0].size())
@@ -291,12 +309,12 @@ class Seq2Seq(nn.Module):
         self.h0_encoder = nn.Parameter(torch.randn(
             self.encoder.num_layers * self.num_directions,
             batch_size,
-            512
+            src_hidden_dim
         ))
         self.c0_encoder = nn.Parameter(torch.randn(
             self.encoder.num_layers * self.num_directions,
             batch_size,
-            512
+            src_hidden_dim
         ))
         self.register_parameter('h0_encoder', self.h0_encoder)
         self.register_parameter('c0_encoder', self.c0_encoder)
@@ -365,7 +383,7 @@ class Seq2Seq(nn.Module):
     def decode(self, logits):
         """Return probability distribution over words."""
         logits_reshape = logits.view(-1, self.trg_vocab_size)
-        word_probs = F.sof(logits_reshape)
+        word_probs = F.softmax(logits_reshape)
         word_probs = word_probs.view(
             logits.size()[0], logits.size()[1], logits.size()[2]
         )
@@ -415,9 +433,10 @@ class Seq2SeqAttention(nn.Module):
             bidirectional=bidirectional,
             batch_first=True
         )
-        self.decoder = LSTMAttentionDot(
+        self.decoder = LSTMAttention(
             trg_emb_dim,
             trg_hidden_dim,
+            ctx_hidden_dim
         )
         self.encoder2decoder = nn.Linear(
             src_hidden_dim * self.num_directions,
@@ -488,7 +507,7 @@ class Seq2SeqAttention(nn.Module):
             ctx
         )
         trg_h_reshape = trg_h.contiguous().view(
-            trg_h.size()[1] * trg_h.size()[0],
+            trg_h.size()[0] * trg_h.size()[1],
             trg_h.size()[2]
         )
         decoder_logit = self.decoder2vocab(trg_h_reshape)

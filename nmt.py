@@ -1,70 +1,107 @@
 #!/u/subramas/miniconda2/bin/python
+"""Data processing utilities."""
+import sys
+
+sys.path.append('/u/subramas/Research/nmt-pytorch/')
+
+from data_utils import read_nmt_data, get_minibatch, read_config, hyperparam_string
+from model import Seq2Seq, Seq2SeqAttention
+from evaluate import evaluate_accuracy
+import math
+import numpy as np
+import logging
+import argparse
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import torch.nn.functional as F
 from torch.autograd import Variable
-import sys
-sys.path.append('/u/subramas/Research/nmt-pytorch/')
-from data_utils import *
-from model import Seq2Seq, Seq2SeqAttention
-import math
-import numpy as np
+
+parser = argparse.ArgumentParser()
+parser.add_argument(
+    "--config",
+    help="path to json config",
+    required=True
+)
+args = parser.parse_args()
+config_file_path = args.config
+config = read_config(config_file_path)
+experiment_name = hyperparam_string(config)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    filename='log/%s' % (experiment_name),
+    filemode='w'
+)
+
+# define a new Handler to log to console as well
+console = logging.StreamHandler()
+# optional, set the logging level
+console.setLevel(logging.INFO)
+# set a format which is the same for console use
+formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+# tell the handler to use this format
+console.setFormatter(formatter)
+# add the handler to the root logger
+logging.getLogger('').addHandler(console)
+
 
 print 'Reading data ...'
 
 src, trg = read_nmt_data(
-    '/Tmp/subramas/nmt-pytorch/en-zh/train',
-    'cmu-mthomework.train.unk.zh',
-    'cmu-mthomework.train.unk.en'
+    src=config['data']['src'],
+    trg=config['data']['trg']
 )
-'''
-src, trg = read_nmt_data(
-    '/data/lisatmp4/subramas/datasets/wmt15/deen/train',
-    'all_de-en.de.tok.shuf',
-    'all_de-en.en.tok.shuf'
+
+src_test, trg_test = read_nmt_data(
+    src=config['data']['valid_src'],
+    trg=config['data']['valid_trg']
 )
-'''
-batch_size = 80
-max_length = 80
+
+batch_size = config['data']['batch_size']
+max_length = config['data']['max_src_length']
 src_vocab_size = len(src['word2id'])
 trg_vocab_size = len(trg['word2id'])
 
-print 'Found %d words in src ' % (src_vocab_size)
-print 'Found %d words in trg ' % (trg_vocab_size)
+logging.info('Found %d words in src ' % (src_vocab_size))
+logging.info('Found %d words in trg ' % (trg_vocab_size))
 
 weight_mask = torch.ones(trg_vocab_size).cuda()
 weight_mask[trg['word2id']['<pad>']] = 0
 loss_criterion = nn.CrossEntropyLoss(weight=weight_mask)
 
-'''
 model = Seq2Seq(
-    src_emb_dim=256,
-    trg_emb_dim=256,
+    src_emb_dim=config['model']['dim_word_src'],
+    trg_emb_dim=config['model']['dim_word_trg'],
     src_vocab_size=src_vocab_size,
     trg_vocab_size=trg_vocab_size,
-    src_hidden_dim=512,
-    trg_hidden_dim=512,
-    batch_size=32,
-    bidirectional=False,
-    nlayers=1,
+    src_hidden_dim=config['model']['dim'],
+    trg_hidden_dim=config['model']['dim'],
+    batch_size=batch_size,
+    bidirectional=config['model']['bidirectional'],
+    nlayers=config['model']['n_layers_src'],
     dropout=0.,
     peek_dim=0
 ).cuda()
+
 '''
 model = Seq2SeqAttention(
-    src_emb_dim=512,
-    trg_emb_dim=512,
+    src_emb_dim=config['model']['dim_word_src'],
+    trg_emb_dim=config['model']['dim_word_trg'],
     src_vocab_size=src_vocab_size,
     trg_vocab_size=trg_vocab_size,
-    src_hidden_dim=1024,
-    trg_hidden_dim=1024,
-    ctx_hidden_dim=1024,
+    src_hidden_dim=config['model']['dim'],
+    trg_hidden_dim=config['model']['dim'],
+    ctx_hidden_dim=config['model']['dim'],
     batch_size=batch_size,
-    bidirectional=True,
-    nlayers=2,
+    bidirectional=config['model']['bidirectional'],
+    nlayers=config['model']['n_layers_src'],
     dropout=0.,
     peek_dim=0
 ).cuda()
+'''
 
 
 def clip_gradient(model, clip):
@@ -78,17 +115,17 @@ def clip_gradient(model, clip):
 
 # import ipdb
 # ipdb.set_trace()
-optimizer = optim.Adadelta(model.parameters())
+optimizer = optim.Adam(model.parameters(), lr=4e-4)
 
 for i in xrange(1000):
     losses = []
     for j in xrange(0, len(src['data']), batch_size):
 
         input_lines_src, _, lens_src, mask_src = get_minibatch(
-            src, j, batch_size, max_length, add_start=False, add_end=False
+            src['data'], src['word2id'], j, batch_size, max_length, add_start=True, add_end=True
         )
         input_lines_trg, output_lines_trg, lens_trg, mask_trg = get_minibatch(
-            trg, j, batch_size, max_length, add_start=False, add_end=False
+            trg['data'], trg['word2id'], j, batch_size, max_length, add_start=True, add_end=True
         )
 
         if input_lines_src.size()[0] != batch_size:
@@ -102,8 +139,9 @@ for i in xrange(1000):
         optimizer.step()
 
         if j % 1000 == 0:
-            print 'Epoch : %d Minibatch : %d Loss : %.5f' % (i, j, np.mean(losses))
+            logging.info('Epoch : %d Minibatch : %d Loss : %.5f' % (i, j, np.mean(losses)))
             losses = []
+        '''
         if j % 10000 == 0:
             word_probs = model.decode(decoder_logit).data.cpu().numpy().argmax(axis=-1)
             output_lines_trg = output_lines_trg.data.cpu().numpy()
@@ -115,7 +153,10 @@ for i in xrange(1000):
                 sentence_real = sentence_real[:index]
                 sentence_pred = sentence_pred[:index]
 
-                print '---------------------------------------------------'
-                print ' '.join(sentence_pred)
-                print ' '.join(sentence_real)
-                print '---------------------------------------------------'
+                logging.info('---------------------------------------------------')
+                logging.info(' '.join(sentence_pred))
+                logging.info(' '.join(sentence_real))
+                logging.info('---------------------------------------------------')
+        '''
+    accuracy = evaluate_accuracy(model, src, src_test, trg, trg_test, config, verbose=False)
+    logging.info('Epoch : %d Accuracy : %.5f ' % (i, accuracy))
