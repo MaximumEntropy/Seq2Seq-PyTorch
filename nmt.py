@@ -6,11 +6,12 @@ sys.path.append('/u/subramas/Research/nmt-pytorch/')
 
 from data_utils import read_nmt_data, get_minibatch, read_config, hyperparam_string
 from model import Seq2Seq, Seq2SeqAttention
-from evaluate import evaluate_accuracy
+from evaluate import evaluate
 import math
 import numpy as np
 import logging
 import argparse
+import os
 
 import torch
 import torch.nn as nn
@@ -28,7 +29,8 @@ args = parser.parse_args()
 config_file_path = args.config
 config = read_config(config_file_path)
 experiment_name = hyperparam_string(config)
-
+save_dir = config['data']['save_dir']
+load_dir = config['data']['load_dir']
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -109,6 +111,11 @@ elif config['model']['seq2seq'] == 'dotattention':
         peek_dim=0
     ).cuda()
 
+if load_dir:
+    model.load_state_dict(torch.load(
+        open(os.path.join(save_dir, experiment_name + '.model'))
+    ))
+
 
 def clip_gradient(model, clip):
     """Compute a gradient clipping coefficient based on gradient norm."""
@@ -119,7 +126,16 @@ def clip_gradient(model, clip):
     totalnorm = math.sqrt(totalnorm)
     return min(1, clip / (totalnorm + 1e-6))
 
-optimizer = optim.Adam(model.parameters(), lr=4e-4)
+if config['training']['optimizer'] == 'adam':
+    lr = config['training']['lrate']
+    optimizer = optim.Adam(model.parameters(), lr=lr)
+elif config['training']['optimizer'] == 'adadelta':
+    optimizer = optim.Adadelta(model.parameters())
+elif config['training']['optimizer'] == 'sgd':
+    lr = config['training']['lrate']
+    optimizer = optim.SGD(model.parameters(), lr=lr)
+else:
+    raise NotImplementedError("Learning method not recommend for task")
 
 for i in xrange(1000):
     losses = []
@@ -142,11 +158,11 @@ for i in xrange(1000):
         loss.backward()
         optimizer.step()
 
-        if j % config['management']['print_samples'] == 0:
+        if j % config['management']['monitor_loss'] == 0:
             logging.info('Epoch : %d Minibatch : %d Loss : %.5f' % (i, j, np.mean(losses)))
             losses = []
 
-        if j % config['management']['print_samples'] == 0:
+        if config['management']['print_samples'] and j % config['management']['print_samples'] == 0:
             word_probs = model.decode(decoder_logit).data.cpu().numpy().argmax(axis=-1)
             output_lines_trg = output_lines_trg.data.cpu().numpy()
             for sentence_pred, sentence_real in zip(word_probs[:5], output_lines_trg[:5]):
@@ -158,5 +174,22 @@ for i in xrange(1000):
                 logging.info(' '.join(sentence_real))
                 logging.info('===================================================')
 
-    accuracy = evaluate_accuracy(model, src, src_test, trg, trg_test, config, verbose=False)
-    logging.info('Epoch : %d Accuracy : %.5f ' % (i, accuracy))
+    if config['data']['task'] == 'transliteration':
+        accuracy = evaluate(
+            model, src, src_test, trg,
+            trg_test, config, verbose=False,
+            metric='accuracy'
+        )
+        logging.info('Epoch : %d Accuracy : %.5f ' % (i, accuracy))
+    elif config['data']['task'] == 'translation':
+        bleu = evaluate(
+            model, src, src_test, trg,
+            trg_test, config, verbose=False,
+            metric='bleu'
+        )
+        logging.info('Epoch : %d BLEU : %.5f ' % (i, bleu))
+
+    torch.save(
+        model.state_dict(),
+        open(os.path.join(save_dir, experiment_name + '.model'), 'wb')
+    )

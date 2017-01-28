@@ -153,4 +153,4 @@ def evaluate(
     if metric == 'accuracy':
         return compute_accuracy(preds, ground_truths)
     else:
-        return bleu(preds, ground_truths)
+        return get_bleu(preds, ground_truths)
