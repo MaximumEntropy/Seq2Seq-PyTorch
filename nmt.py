@@ -1,5 +1,5 @@
 #!/u/subramas/miniconda2/bin/python
-"""Data processing utilities."""
+"""Main script to run things"""
 import sys
 
 sys.path.append('/u/subramas/Research/nmt-pytorch/')
@@ -70,38 +70,44 @@ logging.info('Found %d words in trg ' % (trg_vocab_size))
 
 weight_mask = torch.ones(trg_vocab_size).cuda()
 weight_mask[trg['word2id']['<pad>']] = 0
-loss_criterion = nn.CrossEntropyLoss(weight=weight_mask)
+loss_criterion = nn.CrossEntropyLoss(weight=weight_mask).cuda()
 
-model = Seq2Seq(
-    src_emb_dim=config['model']['dim_word_src'],
-    trg_emb_dim=config['model']['dim_word_trg'],
-    src_vocab_size=src_vocab_size,
-    trg_vocab_size=trg_vocab_size,
-    src_hidden_dim=config['model']['dim'],
-    trg_hidden_dim=config['model']['dim'],
-    batch_size=batch_size,
-    bidirectional=config['model']['bidirectional'],
-    nlayers=config['model']['n_layers_src'],
-    dropout=0.,
-    peek_dim=0
-).cuda()
+if config['model']['seq2seq'] == 'vanilla':
 
-'''
-model = Seq2SeqAttention(
-    src_emb_dim=config['model']['dim_word_src'],
-    trg_emb_dim=config['model']['dim_word_trg'],
-    src_vocab_size=src_vocab_size,
-    trg_vocab_size=trg_vocab_size,
-    src_hidden_dim=config['model']['dim'],
-    trg_hidden_dim=config['model']['dim'],
-    ctx_hidden_dim=config['model']['dim'],
-    batch_size=batch_size,
-    bidirectional=config['model']['bidirectional'],
-    nlayers=config['model']['n_layers_src'],
-    dropout=0.,
-    peek_dim=0
-).cuda()
-'''
+    model = Seq2Seq(
+        src_emb_dim=config['model']['dim_word_src'],
+        trg_emb_dim=config['model']['dim_word_trg'],
+        src_vocab_size=src_vocab_size,
+        trg_vocab_size=trg_vocab_size,
+        src_hidden_dim=config['model']['dim'],
+        trg_hidden_dim=config['model']['dim'],
+        batch_size=batch_size,
+        bidirectional=config['model']['bidirectional'],
+        pad_token_src=src['word2id']['<pad>'],
+        pad_token_trg=trg['word2id']['<pad>'],
+        nlayers=config['model']['n_layers_src'],
+        dropout=0.,
+        peek_dim=0
+    ).cuda()
+
+elif config['model']['seq2seq'] == 'dotattention':
+
+    model = Seq2SeqAttention(
+        src_emb_dim=config['model']['dim_word_src'],
+        trg_emb_dim=config['model']['dim_word_trg'],
+        src_vocab_size=src_vocab_size,
+        trg_vocab_size=trg_vocab_size,
+        src_hidden_dim=config['model']['dim'],
+        trg_hidden_dim=config['model']['dim'],
+        ctx_hidden_dim=config['model']['dim'],
+        batch_size=batch_size,
+        bidirectional=config['model']['bidirectional'],
+        pad_token_src=src['word2id']['<pad>'],
+        pad_token_trg=trg['word2id']['<pad>'],
+        nlayers=config['model']['n_layers_src'],
+        dropout=0.,
+        peek_dim=0
+    ).cuda()
 
 
 def clip_gradient(model, clip):
@@ -113,8 +119,6 @@ def clip_gradient(model, clip):
     totalnorm = math.sqrt(totalnorm)
     return min(1, clip / (totalnorm + 1e-6))
 
-# import ipdb
-# ipdb.set_trace()
 optimizer = optim.Adam(model.parameters(), lr=4e-4)
 
 for i in xrange(1000):
@@ -138,25 +142,21 @@ for i in xrange(1000):
         loss.backward()
         optimizer.step()
 
-        if j % 1000 == 0:
+        if j % config['management']['print_samples'] == 0:
             logging.info('Epoch : %d Minibatch : %d Loss : %.5f' % (i, j, np.mean(losses)))
             losses = []
-        '''
-        if j % 10000 == 0:
+
+        if j % config['management']['print_samples'] == 0:
             word_probs = model.decode(decoder_logit).data.cpu().numpy().argmax(axis=-1)
             output_lines_trg = output_lines_trg.data.cpu().numpy()
             for sentence_pred, sentence_real in zip(word_probs[:5], output_lines_trg[:5]):
                 sentence_pred = [trg['id2word'][x] for x in sentence_pred]
                 sentence_real = [trg['id2word'][x] for x in sentence_real]
 
-                index = sentence_real.index('</s>')
-                sentence_real = sentence_real[:index]
-                sentence_pred = sentence_pred[:index]
-
-                logging.info('---------------------------------------------------')
                 logging.info(' '.join(sentence_pred))
-                logging.info(' '.join(sentence_real))
                 logging.info('---------------------------------------------------')
-        '''
+                logging.info(' '.join(sentence_real))
+                logging.info('===================================================')
+
     accuracy = evaluate_accuracy(model, src, src_test, trg, trg_test, config, verbose=False)
     logging.info('Epoch : %d Accuracy : %.5f ' % (i, accuracy))

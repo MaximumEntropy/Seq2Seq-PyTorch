@@ -1,5 +1,4 @@
 """Data utilities."""
-import os
 import torch
 from torch.autograd import Variable
 import operator

@@ -11,7 +11,7 @@ class RNNCellBase(nn.Module):
     def __repr__(self):
         """Way to display cell."""
         s = '{name}({input_size}, {hidden_size}'
-        if 'bias' in self.__dict__ and self.bias != True:
+        if 'bias' in self.__dict__ and not self.bias:
             s += ', bias={bias}}'
         if 'nonlinearity' in self.__dict__ and self.nonlinearity != "tanh":
             s += ', nonlinearity={nonlinearity}'
@@ -175,44 +175,62 @@ class LSTMAttention(RNNCellBase):
         return output, hidden
 
 
+class SoftDotAttention(nn.Module):
+    """Soft Dot Attention.
+
+    Ref: http://www.aclweb.org/anthology/D15-1166
+    Adapted from PyTorch OPEN NMT.
+    """
+
+    def __init__(self, dim):
+        """Initialize params."""
+        super(SoftDotAttention, self).__init__()
+        self.input2attention = nn.Linear(dim, dim, bias=False)
+        self.Wc = nn.Linear(dim * 2, dim, bias=False)
+
+    def forward(self, input, context, mask=None):
+        """Propogate input through the layer."""
+        projected_input = self.input2attention(input).unsqueeze(2)  # batch x dim x 1
+
+        alpha = torch.bmm(context, projected_input).squeeze(2)  # batch x n_src
+
+        if mask is not None:
+            alpha.data.masked_fill_(self.mask, -math.inf)
+
+        attn = F.softmax(alpha)
+        attn3 = attn.view(attn.size(0), 1, attn.size(1))  # batch x 1 x sourceL
+
+        weighted_context = torch.bmm(attn3, context).squeeze(1)  # batch x dim
+        h_tilde = torch.cat((weighted_context, input), 1)
+
+        h_tilde = F.tanh(self.Wc(h_tilde))
+
+        return h_tilde, attn
+
+
 class LSTMAttentionDot(RNNCellBase):
     r"""A long short-term memory (LSTM) cell with attention."""
 
-    def __init__(self, input_size, hidden_size):
+    def __init__(self, input_size, hidden_size, batch_first=True):
         """Initialize params."""
         super(LSTMAttentionDot, self).__init__()
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.num_layers = 1
+        self.batch_first = batch_first
 
-        self.input_weights_1 = nn.Parameter(torch.Tensor(4 * hidden_size, input_size))
-        self.hidden_weights_1 = nn.Parameter(torch.Tensor(4 * hidden_size, hidden_size))
-        self.input_bias_1 = nn.Parameter(torch.Tensor(4 * hidden_size))
-        self.hidden_bias_1 = nn.Parameter(torch.Tensor(4 * hidden_size))
+        self.input_weights = nn.Linear(input_size, 4 * hidden_size)
+        self.hidden_weights = nn.Linear(hidden_size, 4 * hidden_size)
 
-        self.Wc = nn.Parameter(torch.Tensor(hidden_size, hidden_size * 2))
-
-        self.reset_parameters()
-
-    def reset_parameters(self):
-        """Reset parameters."""
-        stdv = 1.0 / math.sqrt(self.hidden_size)
-
-        self.input_weights_1.data.uniform_(-stdv, stdv)
-        self.hidden_weights_1.data.uniform_(-stdv, stdv)
-        self.input_bias_1.data.fill_(0)
-        self.hidden_bias_1.data.fill_(0)
-
-        self.Wc.data.uniform_(-stdv, stdv)
+        self.attention_layer = SoftDotAttention(hidden_size)
 
     def forward(self, input, hidden, ctx, ctx_mask=None):
         """Propogate input through the network."""
         def recurrence(input, hidden):
             """Recurrence helper."""
             hx, cx = hidden  # n_b x hidden_dim
-
-            gates = F.linear(input, self.input_weights_1, self.input_bias_1) + \
-                F.linear(hx, self.hidden_weights_1, self.hidden_bias_1)
+            gates = self.input_weights(input) + \
+                self.hidden_weights(hx)
             ingate, forgetgate, cellgate, outgate = gates.chunk(4, 1)
 
             ingate = F.sigmoid(ingate)
@@ -223,19 +241,12 @@ class LSTMAttentionDot(RNNCellBase):
             cy = (forgetgate * cx) + (ingate * cellgate)
             hy = outgate * F.tanh(cy)  # n_b x hidden_dim
 
-            # Attention mechanism
-            alpha = torch.bmm(
-                hy.unsqueeze(1),
-                ctx.view(ctx.size(1), ctx.size(2), ctx.size(0))
-            )
-            alpha = F.softmax(alpha.squeeze()).t()
-            weighted_context = torch.mul(ctx, alpha.unsqueeze(2).expand(
-                ctx.size()
-            )).sum(0).squeeze()
-            h_tilde = torch.cat((weighted_context, hy), 1)
-            h_tilde = F.tanh(F.linear(h_tilde, self.Wc))
+            h_tilde, alpha = self.attention_layer(hy, ctx.t())
 
             return h_tilde, cy
+
+        if self.batch_first:
+            input = input.transpose(0, 1)
 
         output = []
         steps = range(input.size(0))
@@ -244,6 +255,9 @@ class LSTMAttentionDot(RNNCellBase):
             output.append(isinstance(hidden, tuple) and hidden[0] or hidden)
 
         output = torch.cat(output, 0).view(input.size(0), *output[0].size())
+
+        if self.batch_first:
+            output = output.transpose(0, 1)
 
         return output, hidden
 
@@ -260,6 +274,8 @@ class Seq2Seq(nn.Module):
         src_hidden_dim,
         trg_hidden_dim,
         batch_size,
+        pad_token_src,
+        pad_token_trg,
         bidirectional=True,
         nlayers=2,
         dropout=0.,
@@ -279,8 +295,19 @@ class Seq2Seq(nn.Module):
         self.dropout = dropout
         self.num_directions = 2 if bidirectional else 1
         self.peek_dim = peek_dim
-        self.src_embedding = nn.Embedding(src_vocab_size, src_emb_dim)
-        self.trg_embedding = nn.Embedding(trg_vocab_size, trg_emb_dim)
+        self.pad_token_src = pad_token_src
+        self.pad_token_trg = pad_token_trg
+
+        self.src_embedding = nn.Embedding(
+            src_vocab_size,
+            src_emb_dim,
+            self.pad_token_src
+        )
+        self.trg_embedding = nn.Embedding(
+            trg_vocab_size,
+            trg_emb_dim,
+            self.pad_token_trg
+        )
 
         self.encoder = nn.LSTM(
             src_emb_dim,
@@ -403,6 +430,8 @@ class Seq2SeqAttention(nn.Module):
         trg_hidden_dim,
         ctx_hidden_dim,
         batch_size,
+        pad_token_src,
+        pad_token_trg,
         bidirectional=True,
         nlayers=2,
         dropout=0.,
@@ -423,8 +452,20 @@ class Seq2SeqAttention(nn.Module):
         self.dropout = dropout
         self.num_directions = 2 if bidirectional else 1
         self.peek_dim = peek_dim
-        self.src_embedding = nn.Embedding(src_vocab_size, src_emb_dim)
-        self.trg_embedding = nn.Embedding(trg_vocab_size, trg_emb_dim)
+        self.pad_token_src = pad_token_src
+        self.pad_token_trg = pad_token_trg
+
+        self.src_embedding = nn.Embedding(
+            src_vocab_size,
+            src_emb_dim,
+            self.pad_token_src
+        )
+        self.trg_embedding = nn.Embedding(
+            trg_vocab_size,
+            trg_emb_dim,
+            self.pad_token_trg
+        )
+
         src_hidden_dim = src_hidden_dim // 2 if self.bidirectional else src_hidden_dim
         self.encoder = nn.LSTM(
             src_emb_dim,
@@ -433,10 +474,9 @@ class Seq2SeqAttention(nn.Module):
             bidirectional=bidirectional,
             batch_first=True
         )
-        self.decoder = LSTMAttention(
+        self.decoder = LSTMAttentionDot(
             trg_emb_dim,
             trg_hidden_dim,
-            ctx_hidden_dim
         )
         self.encoder2decoder = nn.Linear(
             src_hidden_dim * self.num_directions,
@@ -500,9 +540,7 @@ class Seq2SeqAttention(nn.Module):
         )
         # print ctx.size(), decoder_init_state.size(), c_t.size()
         trg_h, (_, _) = self.decoder(
-            trg_emb.view(
-                trg_emb.size()[1], trg_emb.size()[0], trg_emb.size()[2]
-            ),
+            trg_emb,
             (decoder_init_state, c_t),
             ctx
         )
@@ -512,11 +550,10 @@ class Seq2SeqAttention(nn.Module):
         )
         decoder_logit = self.decoder2vocab(trg_h_reshape)
         decoder_logit = decoder_logit.view(
-            trg_h.size()[1],
             trg_h.size()[0],
+            trg_h.size()[1],
             decoder_logit.size()[1]
         )
-
         return decoder_logit
 
     def decode(self, logits):
