@@ -10,6 +10,8 @@ from data_utils import get_minibatch
 from collections import Counter
 import math
 import numpy as np
+import subprocess
+import sys
 
 
 def bleu_stats(hypothesis, reference):
@@ -48,6 +50,27 @@ def get_bleu(hypotheses, reference):
     return 100 * bleu(stats)
 
 
+def get_bleu_moses(hypotheses, reference):
+    """Get BLEU score with moses bleu score."""
+    with open('tmp_hypotheses.txt', 'w') as f:
+        for hypothesis in hypotheses:
+            f.write(' '.join(hypothesis) + '\n')
+
+    with open('tmp_reference.txt', 'w') as f:
+        for ref in reference:
+            f.write(' '.join(ref) + '\n')
+
+    hypothesis_pipe = '\n'.join([' '.join(hyp) for hyp in hypotheses])
+    pipe = subprocess.Popen(
+        ["perl", 'multi-bleu.perl', '-lc', 'tmp_reference.txt'],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE
+    )
+    pipe.stdin.write(hypothesis_pipe)
+    pipe.stdin.close()
+    return pipe.stdout.read()
+
+
 def compute_accuracy(preds, ground_truths):
     """Compute prediction accuracy."""
     equal = 0.
@@ -83,16 +106,24 @@ def evaluate(
         input_lines_trg = Variable(torch.LongTensor(
             [
                 [trg['word2id']['<s>']]
-                for i in xrange(config['data']['batch_size'])
+                for i in xrange(input_lines_src.size(0))
             ]
         )).cuda()
 
-        if input_lines_src.size()[0] != config['data']['batch_size']:
-            break
-
         for i in xrange(config['data']['max_src_length']):
-            decoder_logit = model(input_lines_src, input_lines_trg)
-            logits_reshape = decoder_logit.view(-1, len(trg['word2id']))
+
+            if model.use_crf:
+                mask = Variable(torch.ones(
+                    input_lines_trg.size(1), input_lines_trg.size(0)
+                )).cuda()
+                decoder_logit = model(
+                    input_lines_src, input_lines_trg, mask
+                )
+            else:
+                decoder_logit = model(input_lines_src, input_lines_trg)
+            logits_reshape = decoder_logit.contiguous().view(
+                -1, len(trg['word2id'])
+            )
             word_probs = F.softmax(logits_reshape)
             word_probs = word_probs.view(
                 decoder_logit.size()[0],
@@ -130,7 +161,7 @@ def evaluate(
                 index = sentence_pred.index('</s>')
             else:
                 index = len(sentence_pred)
-            preds.append(sentence_pred[1:index])
+            preds.append(['<s>'] + sentence_pred[1:index] + ['</s>'])
 
             if verbose:
                 print ' '.join(sentence_pred[1:index])
@@ -143,7 +174,7 @@ def evaluate(
                 print ' '.join(sentence_real[:index])
             if verbose:
                 print '--------------------------------------'
-            ground_truths.append(sentence_real[:index])
+            ground_truths.append(['<s>'] + sentence_real[:index] + ['</s>'])
 
             if '</s>' in sentence_real_src:
                 index = sentence_real_src.index('</s>')

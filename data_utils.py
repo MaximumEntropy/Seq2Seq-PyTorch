@@ -7,10 +7,16 @@ import json
 
 def hyperparam_string(config):
     """Hyerparam string."""
-    model = config['model']
-    exp_name = 'model'
-    for k, v in model.items():
-        exp_name += '__' + k + '_' + str(v)
+    exp_name = ''
+    exp_name += 'model_%s__' % (config['data']['task'])
+    exp_name += 'src_%s__' % (config['model']['src_lang'])
+    exp_name += 'trg_%s__' % (config['model']['trg_lang'])
+    exp_name += 'dim_%s__' % (config['model']['dim'])
+    exp_name += 'emb_dim_%s__' % (config['model']['dim_word_src'])
+    exp_name += 'optimizer_%s__' % (config['training']['optimizer'])
+    exp_name += 'n_layers_src_%d__' % (config['model']['n_layers_src'])
+    exp_name += 'n_layers_trg_%d__' % (1)
+    exp_name += 'bidir_%s__' % (config['model']['bidirectional'])
 
     return exp_name
 
@@ -123,6 +129,6 @@ def get_minibatch(lines, word2ind, index, batch_size, max_len, add_start=True, a
 
     input_lines = Variable(torch.LongTensor(input_lines)).cuda()
     output_lines = Variable(torch.LongTensor(output_lines)).cuda()
-    mask = Variable(torch.LongTensor(mask)).cuda()
+    mask = Variable(torch.FloatTensor(mask)).cuda()
 
     return input_lines, output_lines, lens, mask

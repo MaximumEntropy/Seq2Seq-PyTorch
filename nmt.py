@@ -5,7 +5,7 @@ import sys
 sys.path.append('/u/subramas/Research/nmt-pytorch/')
 
 from data_utils import read_nmt_data, get_minibatch, read_config, hyperparam_string
-from model import Seq2Seq, Seq2SeqAttention
+from model import Seq2Seq, Seq2SeqAttention, Seq2SeqFastAttention
 from evaluate import evaluate
 import math
 import numpy as np
@@ -89,7 +89,7 @@ if config['model']['seq2seq'] == 'vanilla':
         pad_token_trg=trg['word2id']['<pad>'],
         nlayers=config['model']['n_layers_src'],
         dropout=0.,
-        peek_dim=0
+        use_crf=config['model']['crf']
     ).cuda()
 
 elif config['model']['seq2seq'] == 'dotattention':
@@ -107,8 +107,26 @@ elif config['model']['seq2seq'] == 'dotattention':
         pad_token_src=src['word2id']['<pad>'],
         pad_token_trg=trg['word2id']['<pad>'],
         nlayers=config['model']['n_layers_src'],
+        nlayers_trg=config['model']['n_layers_trg'],
         dropout=0.,
-        peek_dim=0
+    ).cuda()
+
+elif config['model']['seq2seq'] == 'fastattention':
+
+    model = Seq2SeqFastAttention(
+        src_emb_dim=config['model']['dim_word_src'],
+        trg_emb_dim=config['model']['dim_word_trg'],
+        src_vocab_size=src_vocab_size,
+        trg_vocab_size=trg_vocab_size,
+        src_hidden_dim=config['model']['dim'],
+        trg_hidden_dim=config['model']['dim'],
+        batch_size=batch_size,
+        bidirectional=config['model']['bidirectional'],
+        pad_token_src=src['word2id']['<pad>'],
+        pad_token_trg=trg['word2id']['<pad>'],
+        nlayers=config['model']['n_layers_src'],
+        nlayers_trg=config['model']['n_layers_trg'],
+        dropout=0.,
     ).cuda()
 
 if load_dir:
@@ -137,42 +155,71 @@ elif config['training']['optimizer'] == 'sgd':
 else:
     raise NotImplementedError("Learning method not recommend for task")
 
+torch.save(
+    model.state_dict(),
+    open(os.path.join(
+        save_dir,
+        experiment_name + 'epoch_0.model'), 'wb'
+    )
+)
+
 for i in xrange(1000):
     losses = []
     for j in xrange(0, len(src['data']), batch_size):
 
         input_lines_src, _, lens_src, mask_src = get_minibatch(
-            src['data'], src['word2id'], j, batch_size, max_length, add_start=True, add_end=True
+            src['data'], src['word2id'], j,
+            batch_size, max_length, add_start=True, add_end=True
         )
         input_lines_trg, output_lines_trg, lens_trg, mask_trg = get_minibatch(
-            trg['data'], trg['word2id'], j, batch_size, max_length, add_start=True, add_end=True
+            trg['data'], trg['word2id'], j,
+            batch_size, max_length, add_start=True, add_end=True
         )
 
-        if input_lines_src.size()[0] != batch_size:
-            break
-
-        decoder_logit = model(input_lines_src, input_lines_trg)
+        if model.use_crf:
+            decoder_logit = model(
+                input_lines_src, input_lines_trg, trg_mask=mask_trg.t()
+            )
+        else:
+            decoder_logit = model(input_lines_src, input_lines_trg)
         optimizer.zero_grad()
-        loss = loss_criterion(decoder_logit.view(-1, trg_vocab_size), output_lines_trg.view(-1))
+        loss = loss_criterion(
+            decoder_logit.contiguous().view(-1, trg_vocab_size),
+            output_lines_trg.view(-1)
+        )
         losses.append(loss.data[0])
         loss.backward()
         optimizer.step()
 
         if j % config['management']['monitor_loss'] == 0:
-            logging.info('Epoch : %d Minibatch : %d Loss : %.5f' % (i, j, np.mean(losses)))
+            logging.info('Epoch : %d Minibatch : %d Loss : %.5f' % (
+                i, j, np.mean(losses))
+            )
             losses = []
 
-        if config['management']['print_samples'] and j % config['management']['print_samples'] == 0:
-            word_probs = model.decode(decoder_logit).data.cpu().numpy().argmax(axis=-1)
+        if (
+            config['management']['print_samples'] and
+            j % config['management']['print_samples'] == 0
+        ):
+            word_probs = model.decode(
+                decoder_logit
+            ).data.cpu().numpy().argmax(axis=-1)
             output_lines_trg = output_lines_trg.data.cpu().numpy()
-            for sentence_pred, sentence_real in zip(word_probs[:5], output_lines_trg[:5]):
+            for sentence_pred, sentence_real in zip(
+                word_probs[:5], output_lines_trg[:5]
+            ):
                 sentence_pred = [trg['id2word'][x] for x in sentence_pred]
                 sentence_real = [trg['id2word'][x] for x in sentence_real]
 
+                if '</s>' in sentence_real:
+                    index = sentence_real.index('</s>')
+                    sentence_real = sentence_real[:index]
+                    sentence_pred = sentence_pred[:index]
+
                 logging.info(' '.join(sentence_pred))
-                logging.info('---------------------------------------------------')
+                logging.info('-----------------------------------------------')
                 logging.info(' '.join(sentence_real))
-                logging.info('===================================================')
+                logging.info('===============================================')
 
     if config['data']['task'] == 'transliteration':
         accuracy = evaluate(
@@ -184,12 +231,15 @@ for i in xrange(1000):
     elif config['data']['task'] == 'translation':
         bleu = evaluate(
             model, src, src_test, trg,
-            trg_test, config, verbose=False,
-            metric='bleu'
+            trg_test, config, verbose=True,
+            metric='bleu',
         )
-        logging.info('Epoch : %d BLEU : %.5f ' % (i, bleu))
+        logging.info('Epoch : %d : BLEU : %.5f ' % (i, bleu))
 
     torch.save(
         model.state_dict(),
-        open(os.path.join(save_dir, experiment_name + '.model'), 'wb')
+        open(os.path.join(
+            save_dir,
+            experiment_name + '__epoch_%d' % (i) + '.model'), 'wb'
+        )
     )

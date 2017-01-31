@@ -1,25 +1,66 @@
+"""Sequence to Sequence models."""
 import torch
 import torch.nn as nn
 from torch.autograd import Variable
 import math
 import torch.nn.functional as F
+from crf import CRF
+import numpy as np
 
 
-class RNNCellBase(nn.Module):
-    """RNN Cell Base Class."""
+class StackedAttentionLSTM(nn.Module):
+    """Deep Attention LSTM."""
 
-    def __repr__(self):
-        """Way to display cell."""
-        s = '{name}({input_size}, {hidden_size}'
-        if 'bias' in self.__dict__ and not self.bias:
-            s += ', bias={bias}}'
-        if 'nonlinearity' in self.__dict__ and self.nonlinearity != "tanh":
-            s += ', nonlinearity={nonlinearity}'
-        s += ')'
-        return s.format(name=self.__class__.__name__, **self.__dict__)
+    def __init__(
+        self,
+        input_size,
+        rnn_size,
+        num_layers,
+        batch_first=True,
+        dropout=0.
+    ):
+        """Initialize params."""
+        super(StackedAttentionLSTM, self).__init__()
+        self.dropout = nn.Dropout(dropout)
+        self.input_size = input_size
+        self.rnn_size = rnn_size
+        self.batch_first = batch_first
+
+        self.layers = []
+        for i in range(num_layers):
+            layer = LSTMAttentionDot(
+                input_size, rnn_size, batch_first=self.batch_first
+            )
+            self.add_module('layer_%d' % i, layer)
+            self.layers += [layer]
+            input_size = rnn_size
+
+    def forward(self, input, hidden, ctx, ctx_mask=None):
+        """Propogate input through the layer."""
+        h_0, c_0 = hidden
+        h_1, c_1 = [], []
+        for i, layer in enumerate(self.layers):
+            if ctx_mask is not None:
+                ctx_mask = torch.ByteTensor(
+                    ctx_mask.data.cpu().numpy().astype(np.int32).tolist()
+                ).cuda()
+            output, (h_1_i, c_1_i) = layer(input, (h_0, c_0), ctx, ctx_mask)
+
+            input = output
+
+            if i != len(self.layers):
+                input = self.dropout(input)
+
+            h_1 += [h_1_i]
+            c_1 += [c_1_i]
+
+        h_1 = torch.stack(h_1)
+        c_1 = torch.stack(c_1)
+
+        return input, (h_1, c_1)
 
 
-class LSTMAttention(RNNCellBase):
+class LSTMAttention(nn.Module):
     r"""A long short-term memory (LSTM) cell with attention."""
 
     def __init__(self, input_size, hidden_size, context_size):
@@ -30,22 +71,36 @@ class LSTMAttention(RNNCellBase):
         self.context_size = context_size
         self.num_layers = 1
 
-        self.input_weights_1 = nn.Parameter(torch.Tensor(4 * hidden_size, input_size))
-        self.hidden_weights_1 = nn.Parameter(torch.Tensor(4 * hidden_size, hidden_size))
+        self.input_weights_1 = nn.Parameter(
+            torch.Tensor(4 * hidden_size, input_size)
+        )
+        self.hidden_weights_1 = nn.Parameter(
+            torch.Tensor(4 * hidden_size, hidden_size)
+        )
         self.input_bias_1 = nn.Parameter(torch.Tensor(4 * hidden_size))
         self.hidden_bias_1 = nn.Parameter(torch.Tensor(4 * hidden_size))
 
-        self.input_weights_2 = nn.Parameter(torch.Tensor(4 * hidden_size, context_size))
-        self.hidden_weights_2 = nn.Parameter(torch.Tensor(4 * hidden_size, hidden_size))
+        self.input_weights_2 = nn.Parameter(
+            torch.Tensor(4 * hidden_size, context_size)
+        )
+        self.hidden_weights_2 = nn.Parameter(
+            torch.Tensor(4 * hidden_size, hidden_size)
+        )
         self.input_bias_2 = nn.Parameter(torch.Tensor(4 * hidden_size))
         self.hidden_bias_2 = nn.Parameter(torch.Tensor(4 * hidden_size))
 
-        self.context2attention = nn.Parameter(torch.Tensor(context_size, context_size))
+        self.context2attention = nn.Parameter(
+            torch.Tensor(context_size, context_size)
+        )
         self.bias_context2attention = nn.Parameter(torch.Tensor(context_size))
 
-        self.hidden2attention = nn.Parameter(torch.Tensor(context_size, hidden_size))
+        self.hidden2attention = nn.Parameter(
+            torch.Tensor(context_size, hidden_size)
+        )
 
-        self.input2attention = nn.Parameter(torch.Tensor(input_size, context_size))
+        self.input2attention = nn.Parameter(
+            torch.Tensor(input_size, context_size)
+        )
 
         self.recurrent2attention = nn.Parameter(torch.Tensor(context_size, 1))
 
@@ -97,13 +152,11 @@ class LSTMAttention(RNNCellBase):
 
             # Project current hidden state to context size
             hidden_ctx = F.linear(hy, self.hidden2attention)
-            # print 'Hidden context', hidden_ctx.size()
 
             # Added projected hidden state to each projected context
             hidden_ctx_sum = projected_ctx + hidden_ctx.unsqueeze(0).expand(
                 projected_ctx.size()
             )
-            # print 'Summed context with hidden state ', hidden_ctx_sum.size()
 
             # Add this to projected input at this time step
             hidden_ctx_sum = hidden_ctx_sum + \
@@ -149,9 +202,10 @@ class LSTMAttention(RNNCellBase):
                 self.context2attention.size(1)
             ),
         )
-        projected_ctx += self.bias_context2attention.unsqueeze(0).unsqueeze(0).expand(
-            projected_ctx.size()
-        )
+        projected_ctx += \
+            self.bias_context2attention.unsqueeze(0).unsqueeze(0).expand(
+                projected_ctx.size()
+            )
 
         projected_input = torch.bmm(
             input,
@@ -190,12 +244,14 @@ class SoftDotAttention(nn.Module):
 
     def forward(self, input, context, mask=None):
         """Propogate input through the layer."""
-        projected_input = self.input2attention(input).unsqueeze(2)  # batch x dim x 1
+        # batch x dim x 1
+        projected_input = self.input2attention(input).unsqueeze(2)
 
-        alpha = torch.bmm(context, projected_input).squeeze(2)  # batch x n_src
+        # batch x n_src
+        alpha = torch.bmm(context, projected_input).squeeze(2)
 
         if mask is not None:
-            alpha.data.masked_fill_(self.mask, -math.inf)
+            alpha.data.masked_fill_(mask, -9999.)
 
         attn = F.softmax(alpha)
         attn3 = attn.view(attn.size(0), 1, attn.size(1))  # batch x 1 x sourceL
@@ -208,7 +264,7 @@ class SoftDotAttention(nn.Module):
         return h_tilde, attn
 
 
-class LSTMAttentionDot(RNNCellBase):
+class LSTMAttentionDot(nn.Module):
     r"""A long short-term memory (LSTM) cell with attention."""
 
     def __init__(self, input_size, hidden_size, batch_first=True):
@@ -241,7 +297,7 @@ class LSTMAttentionDot(RNNCellBase):
             cy = (forgetgate * cx) + (ingate * cellgate)
             hy = outgate * F.tanh(cy)  # n_b x hidden_dim
 
-            h_tilde, alpha = self.attention_layer(hy, ctx.t())
+            h_tilde, alpha = self.attention_layer(hy, ctx.t(), ctx_mask)
 
             return h_tilde, cy
 
@@ -278,8 +334,9 @@ class Seq2Seq(nn.Module):
         pad_token_trg,
         bidirectional=True,
         nlayers=2,
+        nlayers_trg=1,
         dropout=0.,
-        peek_dim=0
+        use_crf=False
     ):
         """Initialize model."""
         super(Seq2Seq, self).__init__()
@@ -294,9 +351,11 @@ class Seq2Seq(nn.Module):
         self.nlayers = nlayers
         self.dropout = dropout
         self.num_directions = 2 if bidirectional else 1
-        self.peek_dim = peek_dim
         self.pad_token_src = pad_token_src
         self.pad_token_trg = pad_token_trg
+        self.src_hidden_dim = src_hidden_dim // 2 \
+            if self.bidirectional else src_hidden_dim
+        self.use_crf = use_crf
 
         self.src_embedding = nn.Embedding(
             src_vocab_size,
@@ -311,40 +370,28 @@ class Seq2Seq(nn.Module):
 
         self.encoder = nn.LSTM(
             src_emb_dim,
-            src_hidden_dim,
+            self.src_hidden_dim,
             nlayers,
             bidirectional=bidirectional,
-            batch_first=True
+            batch_first=True,
+            dropout=self.dropout
         )
         self.decoder = nn.LSTM(
-            trg_emb_dim + peek_dim,
+            trg_emb_dim,
             trg_hidden_dim,
-            1,
+            nlayers_trg,
+            dropout=self.dropout,
             batch_first=True
         )
 
         self.encoder2decoder = nn.Linear(
-            src_hidden_dim * self.num_directions,
+            self.src_hidden_dim * self.num_directions,
             trg_hidden_dim
         )
         self.decoder2vocab = nn.Linear(trg_hidden_dim, trg_vocab_size).cuda()
-        if self.peek_dim > 0:
-            self.encoder2peek = nn.Linear(
-                src_hidden_dim * self.num_directions,
-                peek_dim
-            )
-        self.h0_encoder = nn.Parameter(torch.randn(
-            self.encoder.num_layers * self.num_directions,
-            batch_size,
-            src_hidden_dim
-        ))
-        self.c0_encoder = nn.Parameter(torch.randn(
-            self.encoder.num_layers * self.num_directions,
-            batch_size,
-            src_hidden_dim
-        ))
-        self.register_parameter('h0_encoder', self.h0_encoder)
-        self.register_parameter('c0_encoder', self.c0_encoder)
+
+        if self.use_crf:
+            self.crf = CRF(trg_vocab_size)
 
         self.init_weights()
 
@@ -355,11 +402,32 @@ class Seq2Seq(nn.Module):
         self.trg_embedding.weight.data.uniform_(-initrange, initrange)
         self.encoder2decoder.bias.data.fill_(0)
         self.decoder2vocab.bias.data.fill_(0)
+        if self.use_crf:
+            self.crf.transition_matrix.data.uniform_(-0.1, 0.1)
 
-    def forward(self, input_src, input_trg):
+    def get_state(self, input):
+        """Get cell states and hidden states."""
+        batch_size = input.size(0) \
+            if self.encoder.batch_first else input.size(1)
+        h0_encoder = Variable(torch.zeros(
+            self.encoder.num_layers * self.num_directions,
+            batch_size,
+            self.src_hidden_dim
+        ))
+        c0_encoder = Variable(torch.zeros(
+            self.encoder.num_layers * self.num_directions,
+            batch_size,
+            self.src_hidden_dim
+        ))
+
+        return h0_encoder.cuda(), c0_encoder.cuda()
+
+    def forward(self, input_src, input_trg, ctx_mask=None, trg_mask=None):
         """Propogate input through the network."""
         src_emb = self.src_embedding(input_src)
         trg_emb = self.trg_embedding(input_trg)
+
+        self.h0_encoder, self.c0_encoder = self.get_state(input_src)
 
         src_h, (src_h_t, src_c_t) = self.encoder(
             src_emb, (self.h0_encoder, self.c0_encoder)
@@ -373,27 +441,185 @@ class Seq2Seq(nn.Module):
             c_t = src_c_t[-1]
         decoder_init_state = nn.Tanh()(self.encoder2decoder(h_t))
 
-        if self.peek_dim > 0:
-            projected_src = nn.Tanh()(self.encoder2peek(h_t))
-            projected_src = Variable(projected_src.data.repeat(1, trg_emb.size()[1]).view(
-                projected_src.size()[0], trg_emb.size()[1], projected_src.size()[1]
-            ))
-            trg_emb = torch.cat((trg_emb, projected_src), 2)
-
         trg_h, (_, _) = self.decoder(
             trg_emb,
             (
                 decoder_init_state.view(
                     self.decoder.num_layers,
-                    decoder_init_state.size()[0],
-                    decoder_init_state.size()[1]
+                    decoder_init_state.size(0),
+                    decoder_init_state.size(1)
                 ),
                 c_t.view(
                     self.decoder.num_layers,
-                    c_t.size()[0],
-                    c_t.size()[1]
+                    c_t.size(0),
+                    c_t.size(1)
                 )
             )
+        )
+        trg_h_reshape = trg_h.contiguous().view(
+            trg_h.size(0) * trg_h.size(1),
+            trg_h.size(2)
+        )
+        decoder_logit = self.decoder2vocab(trg_h_reshape)
+        decoder_logit = decoder_logit.view(
+            trg_h.size(0),
+            trg_h.size(1),
+            decoder_logit.size(1)
+        )
+
+        if self.use_crf:
+            assert trg_mask is not None
+            decoder_logit = decoder_logit.transpose(0, 1)
+            trg_mask = trg_mask.unsqueeze(2).expand(
+                trg_mask.size(0), trg_mask.size(1), decoder_logit.size(2)
+            )
+            decoder_logit = self.crf.likelihood(
+                decoder_logit, trg_mask
+            ).transpose(0, 1)
+
+        return decoder_logit
+
+    def decode(self, logits):
+        """Return probability distribution over words."""
+        logits_reshape = logits.view(-1, self.trg_vocab_size)
+        word_probs = F.softmax(logits_reshape)
+        word_probs = word_probs.view(
+            logits.size()[0], logits.size()[1], logits.size()[2]
+        )
+        return word_probs
+
+    def decode_crf(self, logits):
+        """Return decoded sequence using CRF."""
+        assert self.use_crf
+        return self.crf.batch_viterbi(logits)
+
+
+class Seq2SeqAttention(nn.Module):
+    """Container module with an encoder, deocder, embeddings."""
+
+    def __init__(
+        self,
+        src_emb_dim,
+        trg_emb_dim,
+        src_vocab_size,
+        trg_vocab_size,
+        src_hidden_dim,
+        trg_hidden_dim,
+        ctx_hidden_dim,
+        batch_size,
+        pad_token_src,
+        pad_token_trg,
+        bidirectional=True,
+        nlayers=2,
+        nlayers_trg=2,
+        dropout=0.,
+        use_crf=False
+    ):
+        """Initialize model."""
+        super(Seq2SeqAttention, self).__init__()
+        self.src_vocab_size = src_vocab_size
+        self.trg_vocab_size = trg_vocab_size
+        self.src_emb_dim = src_emb_dim
+        self.trg_emb_dim = trg_emb_dim
+        self.src_hidden_dim = src_hidden_dim
+        self.trg_hidden_dim = trg_hidden_dim
+        self.ctx_hidden_dim = ctx_hidden_dim
+        self.batch_size = batch_size
+        self.bidirectional = bidirectional
+        self.nlayers = nlayers
+        self.dropout = dropout
+        self.num_directions = 2 if bidirectional else 1
+        self.pad_token_src = pad_token_src
+        self.pad_token_trg = pad_token_trg
+        self.use_crf = use_crf
+
+        self.src_embedding = nn.Embedding(
+            src_vocab_size,
+            src_emb_dim,
+            self.pad_token_src
+        )
+        self.trg_embedding = nn.Embedding(
+            trg_vocab_size,
+            trg_emb_dim,
+            self.pad_token_trg
+        )
+
+        self.src_hidden_dim = src_hidden_dim // 2 \
+            if self.bidirectional else src_hidden_dim
+        self.encoder = nn.LSTM(
+            src_emb_dim,
+            self.src_hidden_dim,
+            nlayers,
+            bidirectional=bidirectional,
+            batch_first=True,
+            dropout=self.dropout
+        )
+
+        self.decoder = LSTMAttentionDot(
+            trg_emb_dim,
+            trg_hidden_dim,
+            batch_first=True
+        )
+
+        self.encoder2decoder = nn.Linear(
+            self.src_hidden_dim * self.num_directions,
+            trg_hidden_dim
+        )
+        self.decoder2vocab = nn.Linear(trg_hidden_dim, trg_vocab_size)
+
+        self.init_weights()
+
+    def init_weights(self):
+        """Initialize weights."""
+        initrange = 0.1
+        self.src_embedding.weight.data.uniform_(-initrange, initrange)
+        self.trg_embedding.weight.data.uniform_(-initrange, initrange)
+        self.encoder2decoder.bias.data.fill_(0)
+        self.decoder2vocab.bias.data.fill_(0)
+
+    def get_state(self, input):
+        """Get cell states and hidden states."""
+        batch_size = input.size(0) \
+            if self.encoder.batch_first else input.size(1)
+        h0_encoder = Variable(torch.zeros(
+            self.encoder.num_layers * self.num_directions,
+            batch_size,
+            self.src_hidden_dim
+        ), requires_grad=False)
+        c0_encoder = Variable(torch.zeros(
+            self.encoder.num_layers * self.num_directions,
+            batch_size,
+            self.src_hidden_dim
+        ), requires_grad=False)
+
+        return h0_encoder.cuda(), c0_encoder.cuda()
+
+    def forward(self, input_src, input_trg, trg_mask=None, ctx_mask=None):
+        """Propogate input through the network."""
+        src_emb = self.src_embedding(input_src)
+        trg_emb = self.trg_embedding(input_trg)
+
+        self.h0_encoder, self.c0_encoder = self.get_state(input_src)
+
+        src_h, (src_h_t, src_c_t) = self.encoder(
+            src_emb, (self.h0_encoder, self.c0_encoder)
+        )
+
+        if self.bidirectional:
+            h_t = torch.cat((src_h_t[-1], src_h_t[-2]), 1)
+            c_t = torch.cat((src_c_t[-1], src_c_t[-2]), 1)
+        else:
+            h_t = src_h_t[-1]
+            c_t = src_c_t[-1]
+        decoder_init_state = nn.Tanh()(self.encoder2decoder(h_t))
+
+        ctx = src_h.transpose(0, 1)
+
+        trg_h, (_, _) = self.decoder(
+            trg_emb,
+            (decoder_init_state, c_t),
+            ctx,
+            ctx_mask
         )
         trg_h_reshape = trg_h.contiguous().view(
             trg_h.size()[0] * trg_h.size()[1],
@@ -417,7 +643,7 @@ class Seq2Seq(nn.Module):
         return word_probs
 
 
-class Seq2SeqAttention(nn.Module):
+class Seq2SeqFastAttention(nn.Module):
     """Container module with an encoder, deocder, embeddings."""
 
     def __init__(
@@ -428,33 +654,33 @@ class Seq2SeqAttention(nn.Module):
         trg_vocab_size,
         src_hidden_dim,
         trg_hidden_dim,
-        ctx_hidden_dim,
         batch_size,
         pad_token_src,
         pad_token_trg,
         bidirectional=True,
         nlayers=2,
+        nlayers_trg=2,
         dropout=0.,
-        peek_dim=0
+        use_crf=False
     ):
         """Initialize model."""
-        super(Seq2SeqAttention, self).__init__()
+        super(Seq2SeqFastAttention, self).__init__()
         self.src_vocab_size = src_vocab_size
         self.trg_vocab_size = trg_vocab_size
         self.src_emb_dim = src_emb_dim
         self.trg_emb_dim = trg_emb_dim
         self.src_hidden_dim = src_hidden_dim
         self.trg_hidden_dim = trg_hidden_dim
-        self.ctx_hidden_dim = ctx_hidden_dim
         self.batch_size = batch_size
         self.bidirectional = bidirectional
         self.nlayers = nlayers
         self.dropout = dropout
         self.num_directions = 2 if bidirectional else 1
-        self.peek_dim = peek_dim
         self.pad_token_src = pad_token_src
         self.pad_token_trg = pad_token_trg
+        self.use_crf = use_crf
 
+        assert trg_hidden_dim == src_hidden_dim
         self.src_embedding = nn.Embedding(
             src_vocab_size,
             src_emb_dim,
@@ -466,40 +692,30 @@ class Seq2SeqAttention(nn.Module):
             self.pad_token_trg
         )
 
-        src_hidden_dim = src_hidden_dim // 2 if self.bidirectional else src_hidden_dim
+        self.src_hidden_dim = src_hidden_dim // 2 \
+            if self.bidirectional else src_hidden_dim
         self.encoder = nn.LSTM(
             src_emb_dim,
-            src_hidden_dim,
+            self.src_hidden_dim,
             nlayers,
             bidirectional=bidirectional,
-            batch_first=True
+            batch_first=True,
+            dropout=self.dropout
         )
-        self.decoder = LSTMAttentionDot(
+
+        self.decoder = nn.LSTM(
             trg_emb_dim,
             trg_hidden_dim,
+            nlayers_trg,
+            batch_first=True,
+            dropout=self.dropout
         )
+
         self.encoder2decoder = nn.Linear(
-            src_hidden_dim * self.num_directions,
+            self.src_hidden_dim * self.num_directions,
             trg_hidden_dim
         )
-        self.decoder2vocab = nn.Linear(trg_hidden_dim, trg_vocab_size)
-        if self.peek_dim > 0:
-            self.encoder2peek = nn.Linear(
-                src_hidden_dim * self.num_directions,
-                peek_dim
-            )
-        self.h0_encoder = nn.Parameter(torch.randn(
-            self.encoder.num_layers * self.num_directions,
-            batch_size,
-            src_hidden_dim
-        ))
-        self.c0_encoder = nn.Parameter(torch.randn(
-            self.encoder.num_layers * self.num_directions,
-            batch_size,
-            src_hidden_dim
-        ))
-        self.register_parameter('h0_encoder', self.h0_encoder)
-        self.register_parameter('c0_encoder', self.c0_encoder)
+        self.decoder2vocab = nn.Linear(2 * trg_hidden_dim, trg_vocab_size)
 
         self.init_weights()
 
@@ -511,14 +727,33 @@ class Seq2SeqAttention(nn.Module):
         self.encoder2decoder.bias.data.fill_(0)
         self.decoder2vocab.bias.data.fill_(0)
 
-    def forward(self, input_src, input_trg):
+    def get_state(self, input):
+        """Get cell states and hidden states."""
+        batch_size = input.size(0) \
+            if self.encoder.batch_first else input.size(1)
+        h0_encoder = Variable(torch.zeros(
+            self.encoder.num_layers * self.num_directions,
+            batch_size,
+            self.src_hidden_dim
+        ), requires_grad=False)
+        c0_encoder = Variable(torch.zeros(
+            self.encoder.num_layers * self.num_directions,
+            batch_size,
+            self.src_hidden_dim
+        ), requires_grad=False)
+
+        return h0_encoder.cuda(), c0_encoder.cuda()
+
+    def forward(self, input_src, input_trg, trg_mask=None, ctx_mask=None):
         """Propogate input through the network."""
         src_emb = self.src_embedding(input_src)
         trg_emb = self.trg_embedding(input_trg)
 
+        self.h0_encoder, self.c0_encoder = self.get_state(input_src)
+
         src_h, (src_h_t, src_c_t) = self.encoder(
             src_emb, (self.h0_encoder, self.c0_encoder)
-        )
+        )  # bsize x seqlen x dim
 
         if self.bidirectional:
             h_t = torch.cat((src_h_t[-1], src_h_t[-2]), 1)
@@ -528,25 +763,34 @@ class Seq2SeqAttention(nn.Module):
             c_t = src_c_t[-1]
         decoder_init_state = nn.Tanh()(self.encoder2decoder(h_t))
 
-        if self.peek_dim > 0:
-            projected_src = nn.Tanh()(self.encoder2peek(h_t))
-            projected_src = Variable(projected_src.data.repeat(1, trg_emb.size()[1]).view(
-                projected_src.size()[0], trg_emb.size()[1], projected_src.size()[1]
-            ))
-            trg_emb = torch.cat((trg_emb, projected_src), 2)
-
-        ctx = src_h.contiguous().view(
-            src_h.size()[1], src_h.size()[0], src_h.size()[2]
-        )
-        # print ctx.size(), decoder_init_state.size(), c_t.size()
         trg_h, (_, _) = self.decoder(
             trg_emb,
-            (decoder_init_state, c_t),
-            ctx
-        )
-        trg_h_reshape = trg_h.contiguous().view(
-            trg_h.size()[0] * trg_h.size()[1],
-            trg_h.size()[2]
+            (
+                decoder_init_state.view(
+                    self.decoder.num_layers,
+                    decoder_init_state.size(0),
+                    decoder_init_state.size(1)
+                ),
+                c_t.view(
+                    self.decoder.num_layers,
+                    c_t.size(0),
+                    c_t.size(1)
+                )
+            )
+        )  # bsize x seqlen x dim
+
+        # Fast Attention dot product
+
+        # bsize x seqlen_src x seq_len_trg
+        alpha = torch.bmm(src_h, trg_h.transpose(1, 2))
+        # bsize x seq_len_trg x dim
+        alpha = torch.bmm(alpha.transpose(1, 2), src_h)
+        # bsize x seq_len_trg x (2 * dim)
+        trg_h_reshape = torch.cat((trg_h, alpha), 2)
+
+        trg_h_reshape = trg_h_reshape.view(
+            trg_h_reshape.size(0) * trg_h_reshape.size(1),
+            trg_h_reshape.size(2)
         )
         decoder_logit = self.decoder2vocab(trg_h_reshape)
         decoder_logit = decoder_logit.view(
