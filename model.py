@@ -167,16 +167,16 @@ class LSTMAttention(nn.Module):
 
             # Compute alignments
             alpha = torch.bmm(
-                hidden_ctx_sum,
+                hidden_ctx_sum.transpose(0, 1),
                 self.recurrent2attention.unsqueeze(0).expand(
-                    hidden_ctx_sum.size(0),
+                    hidden_ctx_sum.size(1),
                     self.recurrent2attention.size(0),
                     self.recurrent2attention.size(1)
                 )
-            ).squeeze().t()
-            alpha = F.softmax(alpha).t()
+            ).squeeze()
+            alpha = F.softmax(alpha)
             weighted_context = torch.mul(
-                projected_ctx, alpha.unsqueeze(2).expand(projected_ctx.size())
+                ctx, alpha.t().unsqueeze(2).expand(ctx.size())
             ).sum(0).squeeze()
 
             gates = F.linear(
@@ -194,6 +194,7 @@ class LSTMAttention(nn.Module):
 
             return hy, cy
 
+        input = input.transpose(0, 1)
         projected_ctx = torch.bmm(
             ctx,
             self.context2attention.unsqueeze(0).expand(
@@ -215,7 +216,7 @@ class LSTMAttention(nn.Module):
                 self.input2attention.size(1)
             ),
         )
-        # print 'Projected input ', projected_input.size()
+
         output = []
         steps = range(input.size(0))
         for i in steps:
@@ -237,29 +238,31 @@ class SoftDotAttention(nn.Module):
     """
 
     def __init__(self, dim):
-        """Initialize params."""
+        """Initialize layer."""
         super(SoftDotAttention, self).__init__()
-        self.input2attention = nn.Linear(dim, dim, bias=False)
-        self.Wc = nn.Linear(dim * 2, dim, bias=False)
+        self.linear_in = nn.Linear(dim, dim, bias=False)
+        self.sm = nn.Softmax()
+        self.linear_out = nn.Linear(dim * 2, dim, bias=False)
+        self.tanh = nn.Tanh()
+        self.mask = None
 
-    def forward(self, input, context, mask=None):
-        """Propogate input through the layer."""
-        # batch x dim x 1
-        projected_input = self.input2attention(input).unsqueeze(2)
+    def forward(self, input, context):
+        """Propogate input through the network.
 
-        # batch x n_src
-        alpha = torch.bmm(context, projected_input).squeeze(2)
+        input: batch x dim
+        context: batch x sourceL x dim
+        """
+        target = self.linear_in(input).unsqueeze(2)  # batch x dim x 1
 
-        if mask is not None:
-            alpha.data.masked_fill_(mask, -9999.)
-
-        attn = F.softmax(alpha)
+        # Get attention
+        attn = torch.bmm(context, target).squeeze(2)  # batch x sourceL
+        attn = self.sm(attn)
         attn3 = attn.view(attn.size(0), 1, attn.size(1))  # batch x 1 x sourceL
 
         weighted_context = torch.bmm(attn3, context).squeeze(1)  # batch x dim
         h_tilde = torch.cat((weighted_context, input), 1)
 
-        h_tilde = F.tanh(self.Wc(h_tilde))
+        h_tilde = self.tanh(self.linear_out(h_tilde))
 
         return h_tilde, attn
 
@@ -296,8 +299,7 @@ class LSTMAttentionDot(nn.Module):
 
             cy = (forgetgate * cx) + (ingate * cellgate)
             hy = outgate * F.tanh(cy)  # n_b x hidden_dim
-
-            h_tilde, alpha = self.attention_layer(hy, ctx.t(), ctx_mask)
+            h_tilde, alpha = self.attention_layer(hy, ctx.transpose(0, 1))
 
             return h_tilde, cy
 
@@ -336,7 +338,6 @@ class Seq2Seq(nn.Module):
         nlayers=2,
         nlayers_trg=1,
         dropout=0.,
-        use_crf=False
     ):
         """Initialize model."""
         super(Seq2Seq, self).__init__()
@@ -355,7 +356,6 @@ class Seq2Seq(nn.Module):
         self.pad_token_trg = pad_token_trg
         self.src_hidden_dim = src_hidden_dim // 2 \
             if self.bidirectional else src_hidden_dim
-        self.use_crf = use_crf
 
         self.src_embedding = nn.Embedding(
             src_vocab_size,
@@ -390,9 +390,6 @@ class Seq2Seq(nn.Module):
         )
         self.decoder2vocab = nn.Linear(trg_hidden_dim, trg_vocab_size).cuda()
 
-        if self.use_crf:
-            self.crf = CRF(trg_vocab_size)
-
         self.init_weights()
 
     def init_weights(self):
@@ -402,8 +399,6 @@ class Seq2Seq(nn.Module):
         self.trg_embedding.weight.data.uniform_(-initrange, initrange)
         self.encoder2decoder.bias.data.fill_(0)
         self.decoder2vocab.bias.data.fill_(0)
-        if self.use_crf:
-            self.crf.transition_matrix.data.uniform_(-0.1, 0.1)
 
     def get_state(self, input):
         """Get cell states and hidden states."""
@@ -467,16 +462,6 @@ class Seq2Seq(nn.Module):
             decoder_logit.size(1)
         )
 
-        if self.use_crf:
-            assert trg_mask is not None
-            decoder_logit = decoder_logit.transpose(0, 1)
-            trg_mask = trg_mask.unsqueeze(2).expand(
-                trg_mask.size(0), trg_mask.size(1), decoder_logit.size(2)
-            )
-            decoder_logit = self.crf.likelihood(
-                decoder_logit, trg_mask
-            ).transpose(0, 1)
-
         return decoder_logit
 
     def decode(self, logits):
@@ -487,11 +472,6 @@ class Seq2Seq(nn.Module):
             logits.size()[0], logits.size()[1], logits.size()[2]
         )
         return word_probs
-
-    def decode_crf(self, logits):
-        """Return decoded sequence using CRF."""
-        assert self.use_crf
-        return self.crf.batch_viterbi(logits)
 
 
 class Seq2SeqAttention(nn.Module):
@@ -506,6 +486,7 @@ class Seq2SeqAttention(nn.Module):
         src_hidden_dim,
         trg_hidden_dim,
         ctx_hidden_dim,
+        attention_mode,
         batch_size,
         pad_token_src,
         pad_token_trg,
@@ -524,6 +505,7 @@ class Seq2SeqAttention(nn.Module):
         self.src_hidden_dim = src_hidden_dim
         self.trg_hidden_dim = trg_hidden_dim
         self.ctx_hidden_dim = ctx_hidden_dim
+        self.attention_mode = attention_mode
         self.batch_size = batch_size
         self.bidirectional = bidirectional
         self.nlayers = nlayers
@@ -555,11 +537,18 @@ class Seq2SeqAttention(nn.Module):
             dropout=self.dropout
         )
 
-        self.decoder = LSTMAttentionDot(
-            trg_emb_dim,
-            trg_hidden_dim,
-            batch_first=True
-        )
+        if self.attention_mode == 'dot':
+            self.decoder = LSTMAttentionDot(
+                trg_emb_dim,
+                trg_hidden_dim,
+                batch_first=True
+            )
+
+        elif self.attention_mode == 'projection':
+            self.decoder = LSTMAttentionDot(
+                trg_emb_dim,
+                trg_hidden_dim,
+            )
 
         self.encoder2decoder = nn.Linear(
             self.src_hidden_dim * self.num_directions,
@@ -808,3 +797,173 @@ class Seq2SeqFastAttention(nn.Module):
             logits.size()[0], logits.size()[1], logits.size()[2]
         )
         return word_probs
+
+
+class Seq2SeqCRF(nn.Module):
+    """Container module with an encoder, deocder, embeddings."""
+
+    def __init__(
+        self,
+        src_emb_dim,
+        trg_emb_dim,
+        src_vocab_size,
+        trg_vocab_size,
+        src_hidden_dim,
+        trg_hidden_dim,
+        batch_size,
+        pad_token_src,
+        pad_token_trg,
+        bidirectional=True,
+        nlayers=2,
+        nlayers_trg=1,
+        dropout=0.,
+    ):
+        """Initialize model."""
+        super(Seq2SeqCRF, self).__init__()
+        self.src_vocab_size = src_vocab_size
+        self.trg_vocab_size = trg_vocab_size
+        self.src_emb_dim = src_emb_dim
+        self.trg_emb_dim = trg_emb_dim
+        self.src_hidden_dim = src_hidden_dim
+        self.trg_hidden_dim = trg_hidden_dim
+        self.batch_size = batch_size
+        self.bidirectional = bidirectional
+        self.nlayers = nlayers
+        self.dropout = dropout
+        self.num_directions = 2 if bidirectional else 1
+        self.pad_token_src = pad_token_src
+        self.pad_token_trg = pad_token_trg
+        self.src_hidden_dim = src_hidden_dim // 2 \
+            if self.bidirectional else src_hidden_dim
+
+        self.src_embedding = nn.Embedding(
+            src_vocab_size,
+            src_emb_dim,
+            self.pad_token_src
+        )
+        self.trg_embedding = nn.Embedding(
+            trg_vocab_size,
+            trg_emb_dim,
+            self.pad_token_trg
+        )
+
+        self.encoder = nn.LSTM(
+            src_emb_dim,
+            self.src_hidden_dim,
+            nlayers,
+            bidirectional=bidirectional,
+            batch_first=True,
+            dropout=self.dropout
+        )
+        self.decoder = nn.LSTM(
+            trg_emb_dim,
+            trg_hidden_dim,
+            nlayers_trg,
+            dropout=self.dropout,
+            batch_first=True
+        )
+
+        self.encoder2decoder = nn.Linear(
+            self.src_hidden_dim * self.num_directions,
+            trg_hidden_dim
+        )
+        self.decoder2vocab = nn.Linear(trg_hidden_dim, trg_vocab_size).cuda()
+
+        self.crf = CRF(trg_vocab_size)
+
+        self.init_weights()
+
+    def init_weights(self):
+        """Initialize weights."""
+        initrange = 0.1
+        self.src_embedding.weight.data.uniform_(-initrange, initrange)
+        self.trg_embedding.weight.data.uniform_(-initrange, initrange)
+        self.encoder2decoder.bias.data.fill_(0)
+        self.decoder2vocab.bias.data.fill_(0)
+        self.crf.transition_matrix.data.uniform_(-0.1, 0.1)
+
+    def get_state(self, input):
+        """Get cell states and hidden states."""
+        batch_size = input.size(0) \
+            if self.encoder.batch_first else input.size(1)
+        h0_encoder = Variable(torch.zeros(
+            self.encoder.num_layers * self.num_directions,
+            batch_size,
+            self.src_hidden_dim
+        ))
+        c0_encoder = Variable(torch.zeros(
+            self.encoder.num_layers * self.num_directions,
+            batch_size,
+            self.src_hidden_dim
+        ))
+
+        return h0_encoder.cuda(), c0_encoder.cuda()
+
+    def forward(self, input_src, input_trg, ctx_mask=None, trg_mask=None):
+        """Propogate input through the network."""
+        src_emb = self.src_embedding(input_src)
+        trg_emb = self.trg_embedding(input_trg)
+
+        self.h0_encoder, self.c0_encoder = self.get_state(input_src)
+
+        src_h, (src_h_t, src_c_t) = self.encoder(
+            src_emb, (self.h0_encoder, self.c0_encoder)
+        )
+
+        if self.bidirectional:
+            h_t = torch.cat((src_h_t[-1], src_h_t[-2]), 1)
+            c_t = torch.cat((src_c_t[-1], src_c_t[-2]), 1)
+        else:
+            h_t = src_h_t[-1]
+            c_t = src_c_t[-1]
+        decoder_init_state = nn.Tanh()(self.encoder2decoder(h_t))
+
+        trg_h, (_, _) = self.decoder(
+            trg_emb,
+            (
+                decoder_init_state.view(
+                    self.decoder.num_layers,
+                    decoder_init_state.size(0),
+                    decoder_init_state.size(1)
+                ),
+                c_t.view(
+                    self.decoder.num_layers,
+                    c_t.size(0),
+                    c_t.size(1)
+                )
+            )
+        )
+        trg_h_reshape = trg_h.contiguous().view(
+            trg_h.size(0) * trg_h.size(1),
+            trg_h.size(2)
+        )
+        decoder_logit = self.decoder2vocab(trg_h_reshape)
+        decoder_logit = decoder_logit.view(
+            trg_h.size(0),
+            trg_h.size(1),
+            decoder_logit.size(1)
+        )
+        decoder_logit_rnn = decoder_logit
+        assert trg_mask is not None
+        decoder_logit = decoder_logit.transpose(0, 1)
+        trg_mask = trg_mask.unsqueeze(2).expand(
+            trg_mask.size(0), trg_mask.size(1), decoder_logit.size(2)
+        )
+        decoder_logit = self.crf.likelihood(
+            decoder_logit, trg_mask
+        ).transpose(0, 1)
+
+        return decoder_logit, decoder_logit_rnn
+
+    def decode(self, logits):
+        """Return probability distribution over words."""
+        logits_reshape = logits.contiguous().view(-1, self.trg_vocab_size)
+        word_probs = F.softmax(logits_reshape)
+        word_probs = word_probs.view(
+            logits.size()[0], logits.size()[1], logits.size()[2]
+        )
+        return word_probs
+
+    def viterbi_decode(self, logits):
+        """Return decoded sequence using CRF."""
+        return self.crf.batch_viterbi(logits)

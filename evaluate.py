@@ -83,10 +83,10 @@ def compute_accuracy(preds, ground_truths):
     return (equal / len(preds)) * 100
 
 
-def evaluate(
+def evaluate_model(
     model, src, src_test, trg,
-    trg_test, config, verbose=True,
-    metric='accuracy'
+    trg_test, config, src_valid=None, trg_valid=None,
+    verbose=True, metric='accuracy'
 ):
     """Evaluate model."""
     preds = []
@@ -112,25 +112,22 @@ def evaluate(
 
         for i in xrange(config['data']['max_src_length']):
 
-            if model.use_crf:
+            if config['model']['seq2seq'] == 'vanilla_crf':
                 mask = Variable(torch.ones(
                     input_lines_trg.size(1), input_lines_trg.size(0)
                 )).cuda()
-                decoder_logit = model(
-                    input_lines_src, input_lines_trg, mask
+                decoder_logit_rnn, decoder_logit_crf = model(
+                    input_lines_src, input_lines_trg, trg_mask=mask
                 )
+                if config['model']['decode'] == 'greedy':
+                    word_probs = model.decode(decoder_logit_crf)
+                else:
+                    decoder_argmax = model.viterbi_decode(decoder_logit_crf)
             else:
                 decoder_logit = model(input_lines_src, input_lines_trg)
-            logits_reshape = decoder_logit.contiguous().view(
-                -1, len(trg['word2id'])
-            )
-            word_probs = F.softmax(logits_reshape)
-            word_probs = word_probs.view(
-                decoder_logit.size()[0],
-                decoder_logit.size()[1],
-                decoder_logit.size()[2]
-            )
-            decoder_argmax = word_probs.data.cpu().numpy().argmax(axis=-1)
+                word_probs = model.decode(decoder_logit)
+            if config['model']['decode'] == 'greedy':
+                decoder_argmax = word_probs.data.cpu().numpy().argmax(axis=-1)
             next_preds = Variable(
                 torch.from_numpy(decoder_argmax[:, -1])
             ).cuda()
@@ -139,8 +136,15 @@ def evaluate(
                 (input_lines_trg, next_preds.unsqueeze(1)),
                 1
             )
+        if (
+            config['model']['seq2seq'] == 'vanilla_crf' and
+            config['model']['decode'] == 'viterbi'
+        ):
+            input_lines_trg = model.viterbi_decode(decoder_logit_crf)
 
-        input_lines_trg = input_lines_trg.data.cpu().numpy()
+        if not config['model']['decode'] == 'viterbi':
+            input_lines_trg = input_lines_trg.data.cpu().numpy()
+
         input_lines_trg = [
             [trg['id2word'][x] for x in line]
             for line in input_lines_trg
@@ -161,20 +165,20 @@ def evaluate(
                 index = sentence_pred.index('</s>')
             else:
                 index = len(sentence_pred)
-            preds.append(['<s>'] + sentence_pred[1:index] + ['</s>'])
+            preds.append(['<s>'] + sentence_pred[:index + 1])
 
             if verbose:
-                print ' '.join(sentence_pred[1:index])
+                print ' '.join(['<s>'] + sentence_pred[:index + 1])
 
             if '</s>' in sentence_real:
                 index = sentence_real.index('</s>')
             else:
                 index = len(sentence_real)
             if verbose:
-                print ' '.join(sentence_real[:index])
+                print ' '.join(['<s>'] + sentence_real[:index + 1])
             if verbose:
                 print '--------------------------------------'
-            ground_truths.append(['<s>'] + sentence_real[:index] + ['</s>'])
+            ground_truths.append(['<s>'] + sentence_real[:index + 1])
 
             if '</s>' in sentence_real_src:
                 index = sentence_real_src.index('</s>')

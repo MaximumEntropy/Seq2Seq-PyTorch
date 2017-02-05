@@ -5,8 +5,8 @@ import sys
 sys.path.append('/u/subramas/Research/nmt-pytorch/')
 
 from data_utils import read_nmt_data, get_minibatch, read_config, hyperparam_string
-from model import Seq2Seq, Seq2SeqAttention, Seq2SeqFastAttention
-from evaluate import evaluate
+from model import Seq2Seq, Seq2SeqAttention, Seq2SeqFastAttention, Seq2SeqCRF
+from evaluate import evaluate_model
 import math
 import numpy as np
 import logging
@@ -57,15 +57,42 @@ src, trg = read_nmt_data(
     trg=config['data']['trg']
 )
 
-src_test, trg_test = read_nmt_data(
+'''
+src_valid, trg_valid = read_nmt_data(
     src=config['data']['valid_src'],
     trg=config['data']['valid_trg']
+)
+'''
+
+src_test, trg_test = read_nmt_data(
+    src=config['data']['test_src'],
+    trg=config['data']['test_trg']
 )
 
 batch_size = config['data']['batch_size']
 max_length = config['data']['max_src_length']
 src_vocab_size = len(src['word2id'])
 trg_vocab_size = len(trg['word2id'])
+
+logging.info('Model Parameters : ')
+logging.info('Task : %s ' % (config['data']['task']))
+logging.info('Model : %s ' % (config['model']['seq2seq']))
+logging.info('Source Language : %s ' % (config['model']['src_lang']))
+logging.info('Target Language : %s ' % (config['model']['trg_lang']))
+logging.info('Source Word Embedding Dim  : %s' % (config['model']['dim_word_src']))
+logging.info('Target Word Embedding Dim  : %s' % (config['model']['dim_word_trg']))
+logging.info('Source RNN Hidden Dim  : %s' % (config['model']['dim']))
+logging.info('Target RNN Hidden Dim  : %s' % (config['model']['dim']))
+logging.info('Source RNN Depth : %d ' % (config['model']['n_layers_src']))
+logging.info('Target RNN Depth : %d ' % (config['data']['batch_size']))
+logging.info('Source RNN Bidirectional  : %s' % (config['model']['bidirectional']))
+logging.info('Batch Size : %d ' % (config['model']['n_layers_trg']))
+logging.info('Optimizer : %s ' % (config['training']['optimizer']))
+logging.info('Learning Rate : %f ' % (config['training']['lrate']))
+
+if config['model']['seq2seq'] == 'vanilla_crf':
+    logging.info('Cost : %s ' % (config['model']['loss']))
+    logging.info('Decode : %s ' % (config['model']['decode']))
 
 logging.info('Found %d words in src ' % (src_vocab_size))
 logging.info('Found %d words in trg ' % (trg_vocab_size))
@@ -89,7 +116,6 @@ if config['model']['seq2seq'] == 'vanilla':
         pad_token_trg=trg['word2id']['<pad>'],
         nlayers=config['model']['n_layers_src'],
         dropout=0.,
-        use_crf=config['model']['crf']
     ).cuda()
 
 elif config['model']['seq2seq'] == 'dotattention':
@@ -102,6 +128,27 @@ elif config['model']['seq2seq'] == 'dotattention':
         src_hidden_dim=config['model']['dim'],
         trg_hidden_dim=config['model']['dim'],
         ctx_hidden_dim=config['model']['dim'],
+        attention_mode='dot',
+        batch_size=batch_size,
+        bidirectional=config['model']['bidirectional'],
+        pad_token_src=src['word2id']['<pad>'],
+        pad_token_trg=trg['word2id']['<pad>'],
+        nlayers=config['model']['n_layers_src'],
+        nlayers_trg=config['model']['n_layers_trg'],
+        dropout=0.,
+    ).cuda()
+
+elif config['model']['seq2seq'] == 'projection':
+
+    model = Seq2SeqAttention(
+        src_emb_dim=config['model']['dim_word_src'],
+        trg_emb_dim=config['model']['dim_word_trg'],
+        src_vocab_size=src_vocab_size,
+        trg_vocab_size=trg_vocab_size,
+        src_hidden_dim=config['model']['dim'],
+        trg_hidden_dim=config['model']['dim'],
+        ctx_hidden_dim=config['model']['dim'],
+        attention_mode='projection',
         batch_size=batch_size,
         bidirectional=config['model']['bidirectional'],
         pad_token_src=src['word2id']['<pad>'],
@@ -129,9 +176,28 @@ elif config['model']['seq2seq'] == 'fastattention':
         dropout=0.,
     ).cuda()
 
+elif config['model']['seq2seq'] == 'vanilla_crf':
+
+    model = Seq2SeqCRF(
+        src_emb_dim=config['model']['dim_word_src'],
+        trg_emb_dim=config['model']['dim_word_trg'],
+        src_vocab_size=src_vocab_size,
+        trg_vocab_size=trg_vocab_size,
+        src_hidden_dim=config['model']['dim'],
+        trg_hidden_dim=config['model']['dim'],
+        batch_size=batch_size,
+        bidirectional=config['model']['bidirectional'],
+        pad_token_src=src['word2id']['<pad>'],
+        pad_token_trg=trg['word2id']['<pad>'],
+        nlayers=config['model']['n_layers_src'],
+        nlayers_trg=config['model']['n_layers_trg'],
+        dropout=0.,
+    ).cuda()
+
+
 if load_dir:
     model.load_state_dict(torch.load(
-        open(os.path.join(save_dir, experiment_name + '.model'))
+        open(load_dir)
     ))
 
 
@@ -176,17 +242,32 @@ for i in xrange(1000):
             batch_size, max_length, add_start=True, add_end=True
         )
 
-        if model.use_crf:
-            decoder_logit = model(
+        if config['model']['seq2seq'] == 'vanilla_crf':
+            decoder_logit_crf, decoder_logit_rnn = model(
                 input_lines_src, input_lines_trg, trg_mask=mask_trg.t()
             )
         else:
             decoder_logit = model(input_lines_src, input_lines_trg)
         optimizer.zero_grad()
-        loss = loss_criterion(
-            decoder_logit.contiguous().view(-1, trg_vocab_size),
-            output_lines_trg.view(-1)
-        )
+
+        if config['model']['seq2seq'] == 'vanilla_crf':
+            rnn_loss = loss_criterion(
+                decoder_logit_rnn.contiguous().view(-1, trg_vocab_size),
+                output_lines_trg.view(-1)
+            )
+            crf_loss = loss_criterion(
+                decoder_logit_crf.contiguous().view(-1, trg_vocab_size),
+                output_lines_trg.view(-1)
+            )
+            if config['model']['loss'] == 'crf':
+                loss = crf_loss
+            elif config['model']['loss'] == 'aux':
+                loss = rnn_loss + crf_loss
+        else:
+            loss = loss_criterion(
+                decoder_logit.contiguous().view(-1, trg_vocab_size),
+                output_lines_trg.view(-1)
+            )
         losses.append(loss.data[0])
         loss.backward()
         optimizer.step()
@@ -201,9 +282,19 @@ for i in xrange(1000):
             config['management']['print_samples'] and
             j % config['management']['print_samples'] == 0
         ):
-            word_probs = model.decode(
-                decoder_logit
-            ).data.cpu().numpy().argmax(axis=-1)
+            if config['model']['seq2seq'] == 'vanilla_crf':
+                word_probs = model.viterbi_decode(
+                    decoder_logit_crf
+                )
+                '''
+                word_probs = model.decode(
+                    decoder_logit_rnn
+                ).data.cpu().numpy().argmax(axis=-1)
+                '''
+            else:
+                word_probs = model.decode(
+                    decoder_logit
+                ).data.cpu().numpy().argmax(axis=-1)
             output_lines_trg = output_lines_trg.data.cpu().numpy()
             for sentence_pred, sentence_real in zip(
                 word_probs[:5], output_lines_trg[:5]
@@ -222,14 +313,14 @@ for i in xrange(1000):
                 logging.info('===============================================')
 
     if config['data']['task'] == 'transliteration':
-        accuracy = evaluate(
+        accuracy = evaluate_model(
             model, src, src_test, trg,
-            trg_test, config, verbose=False,
-            metric='accuracy'
+            trg_test, config, None, None,
+            verbose=False, metric='accuracy'
         )
         logging.info('Epoch : %d Accuracy : %.5f ' % (i, accuracy))
     elif config['data']['task'] == 'translation':
-        bleu = evaluate(
+        bleu = evaluate_model(
             model, src, src_test, trg,
             trg_test, config, verbose=True,
             metric='bleu',
