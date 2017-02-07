@@ -6,7 +6,7 @@ sys.path.append('/u/subramas/Research/nmt-pytorch')
 import torch
 import torch.nn.functional as F
 from torch.autograd import Variable
-from data_utils import get_minibatch
+from data_utils import get_minibatch, get_autoencode_minibatch
 from collections import Counter
 import math
 import numpy as np
@@ -71,22 +71,10 @@ def get_bleu_moses(hypotheses, reference):
     return pipe.stdout.read()
 
 
-def compute_accuracy(preds, ground_truths):
-    """Compute prediction accuracy."""
-    equal = 0.
-    for pred, gold in zip(preds, ground_truths):
-        pred = ' '.join(pred)
-        gold = ' '.join(gold)
-        if pred == gold:
-            equal += 1
-
-    return (equal / len(preds)) * 100
-
-
 def evaluate_model(
     model, src, src_test, trg,
     trg_test, config, src_valid=None, trg_valid=None,
-    verbose=True, metric='accuracy'
+    verbose=True, metric='bleu'
 ):
     """Evaluate model."""
     preds = []
@@ -112,22 +100,9 @@ def evaluate_model(
 
         for i in xrange(config['data']['max_src_length']):
 
-            if config['model']['seq2seq'] == 'vanilla_crf':
-                mask = Variable(torch.ones(
-                    input_lines_trg.size(1), input_lines_trg.size(0)
-                )).cuda()
-                decoder_logit_rnn, decoder_logit_crf = model(
-                    input_lines_src, input_lines_trg, trg_mask=mask
-                )
-                if config['model']['decode'] == 'greedy':
-                    word_probs = model.decode(decoder_logit_crf)
-                else:
-                    decoder_argmax = model.viterbi_decode(decoder_logit_crf)
-            else:
-                decoder_logit = model(input_lines_src, input_lines_trg)
-                word_probs = model.decode(decoder_logit)
-            if config['model']['decode'] == 'greedy':
-                decoder_argmax = word_probs.data.cpu().numpy().argmax(axis=-1)
+            decoder_logit = model(input_lines_src, input_lines_trg)
+            word_probs = model.decode(decoder_logit)
+            decoder_argmax = word_probs.data.cpu().numpy().argmax(axis=-1)
             next_preds = Variable(
                 torch.from_numpy(decoder_argmax[:, -1])
             ).cuda()
@@ -136,14 +111,6 @@ def evaluate_model(
                 (input_lines_trg, next_preds.unsqueeze(1)),
                 1
             )
-        if (
-            config['model']['seq2seq'] == 'vanilla_crf' and
-            config['model']['decode'] == 'viterbi'
-        ):
-            input_lines_trg = model.viterbi_decode(decoder_logit_crf)
-
-        if not config['model']['decode'] == 'viterbi':
-            input_lines_trg = input_lines_trg.data.cpu().numpy()
 
         input_lines_trg = [
             [trg['id2word'][x] for x in line]
@@ -185,7 +152,80 @@ def evaluate_model(
             else:
                 index = len(sentence_real_src)
 
-    if metric == 'accuracy':
-        return compute_accuracy(preds, ground_truths)
-    else:
-        return get_bleu(preds, ground_truths)
+    return get_bleu(preds, ground_truths)
+
+
+def evaluate_autoencode_model(
+    model, src, src_test,
+    config, src_valid=None,
+    verbose=True, metric='bleu'
+):
+    """Evaluate model."""
+    preds = []
+    ground_truths = []
+    for j in xrange(0, len(src_test['data']), config['data']['batch_size']):
+
+        print 'Decoding batch : %d out of %d ' % (j, len(src_test['data']))
+        input_lines_src, lens_src, mask_src = get_autoencode_minibatch(
+            src_test['data'], src['word2id'], j, config['data']['batch_size'],
+            config['data']['max_src_length'], add_start=True, add_end=True
+        )
+
+        input_lines_trg = Variable(torch.LongTensor(
+            [
+                [src['word2id']['<s>']]
+                for i in xrange(input_lines_src.size(0))
+            ]
+        )).cuda()
+
+        for i in xrange(config['data']['max_src_length']):
+
+            decoder_logit = model(input_lines_src, input_lines_trg)
+            word_probs = model.decode(decoder_logit)
+            decoder_argmax = word_probs.data.cpu().numpy().argmax(axis=-1)
+            next_preds = Variable(
+                torch.from_numpy(decoder_argmax[:, -1])
+            ).cuda()
+
+            input_lines_trg = torch.cat(
+                (input_lines_trg, next_preds.unsqueeze(1)),
+                1
+            )
+
+        input_lines_trg = input_lines_trg.data.cpu().numpy()
+
+        input_lines_trg = [
+            [src['id2word'][x] for x in line]
+            for line in input_lines_trg
+        ]
+
+        output_lines_trg_gold = input_lines_src.data.cpu().numpy()
+        output_lines_trg_gold = [
+            [src['id2word'][x] for x in line]
+            for line in output_lines_trg_gold
+        ]
+
+        for sentence_pred, sentence_real in zip(
+            input_lines_trg,
+            output_lines_trg_gold,
+        ):
+            if '</s>' in sentence_pred:
+                index = sentence_pred.index('</s>')
+            else:
+                index = len(sentence_pred)
+            preds.append(sentence_pred[:index + 1])
+
+            if verbose:
+                print ' '.join(sentence_pred[:index + 1])
+
+            if '</s>' in sentence_real:
+                index = sentence_real.index('</s>')
+            else:
+                index = len(sentence_real)
+            if verbose:
+                print ' '.join(sentence_real[:index + 1])
+            if verbose:
+                print '--------------------------------------'
+            ground_truths.append(sentence_real[:index + 1])
+
+    return get_bleu(preds, ground_truths)
