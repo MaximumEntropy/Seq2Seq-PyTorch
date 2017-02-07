@@ -47,7 +47,7 @@ The model was trained with following configuration
 | ------------- | ------------- | ------------- |
 | Seq2Seq | -- | -- |
 | Seq2Seq FastAttention | 18.89 | 3h 45min |
-| Seq2Seq Attention | 20.77 | 4h 47min |
+| Seq2Seq Attention | 21.85 | 4h 47min |
 
 Times reported are using a Pre 2016 Nvidia GeForce Titan X
 
