@@ -16,11 +16,11 @@ At present it has implementations for :
 
 A vanilla sequence to sequence model presented in https://arxiv.org/abs/1409.3215, https://arxiv.org/abs/1406.1078 consits of using a recurrent neural network such as an LSTM (http://dl.acm.org/citation.cfm?id=1246450) or GRU (https://arxiv.org/abs/1412.3555) to encode a sequence of words or characters in a *source* language into a fixed length vector representation and then deocoding from that representation using another RNN in the *target* language.
 
-![Alt text](images/Seq2Seq.png?raw=true "Seq2Seq")
+![Sequence to Sequence](/images/Seq2Seq.png)
 
 An extension of sequence to sequence models that incorporate an attention mechanism was presented in https://arxiv.org/abs/1409.0473 that uses information from the RNN hidden states in the source language at each time step in the deocder RNN. This attention mechanism significantly improves performance on tasks like machine translation. A few variants of the attention model for the task of machine translation have been presented in https://arxiv.org/abs/1508.04025.
 
-![Alt text](images/Seq2SeqAttention.png?raw=true "Seq2SeqAttention")
+![Sequence to Sequence with attention](/images/Seq2SeqAttention.png)
 
 The repository also contains a simpler and faster variant of the attention mechanism that doesn't attend over the hidden states of the encoder at each time step in the deocder. Instead, it computes the a single batched dot product between all the hidden states of the decoder and encoder once after the decoder has processed all inputs in the target. This however comes at a minor cost in model performance. One advantage of this model is that it is possible to use the cuDNN LSTM in the attention based decoder as well since the attention is computed after running through all the inputs in the decoder.
 
