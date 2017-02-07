@@ -5,7 +5,7 @@ import sys
 sys.path.append('/u/subramas/Research/nmt-pytorch/')
 
 from data_utils import read_nmt_data, get_minibatch, read_config, hyperparam_string
-from model import Seq2Seq, Seq2SeqAttention, Seq2SeqFastAttention, Seq2SeqCRF
+from model import Seq2Seq, Seq2SeqAttention, Seq2SeqFastAttention
 from evaluate import evaluate_model
 import math
 import numpy as np
