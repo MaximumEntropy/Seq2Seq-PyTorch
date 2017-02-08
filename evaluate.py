@@ -112,6 +112,7 @@ def evaluate_model(
                 1
             )
 
+        input_lines_trg = input_lines_trg.data.cpu().numpy()
         input_lines_trg = [
             [trg['id2word'][x] for x in line]
             for line in input_lines_trg
