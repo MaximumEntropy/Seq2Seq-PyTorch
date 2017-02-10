@@ -45,7 +45,7 @@ The model was trained with following configuration
 
 | Model | BLEU | Train Time Per Epoch |
 | ------------- | ------------- | ------------- |
-| Seq2Seq | -- | 2h 50min |
+| Seq2Seq | 11.82 | 2h 50min |
 | Seq2Seq FastAttention | 18.89 | 3h 45min |
 | Seq2Seq Attention | 22.60 | 4h 47min |
 
