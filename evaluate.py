@@ -71,6 +71,31 @@ def get_bleu_moses(hypotheses, reference):
     return pipe.stdout.read()
 
 
+def decode_minibatch(
+    config,
+    model,
+    input_lines_src,
+    input_lines_trg,
+    output_lines_trg_gold
+):
+    """Decode a minibatch."""
+    for i in xrange(config['data']['max_trg_length']):
+
+        decoder_logit = model(input_lines_src, input_lines_trg)
+        word_probs = model.decode(decoder_logit)
+        decoder_argmax = word_probs.data.cpu().numpy().argmax(axis=-1)
+        next_preds = Variable(
+            torch.from_numpy(decoder_argmax[:, -1])
+        ).cuda()
+
+        input_lines_trg = torch.cat(
+            (input_lines_trg, next_preds.unsqueeze(1)),
+            1
+        )
+
+    return input_lines_trg
+
+
 def evaluate_model(
     model, src, src_test, trg,
     trg_test, config, src_valid=None, trg_valid=None,
@@ -81,16 +106,22 @@ def evaluate_model(
     ground_truths = []
     for j in xrange(0, len(src_test['data']), config['data']['batch_size']):
 
+        # Get source minibatch
         input_lines_src, output_lines_src, lens_src, mask_src = get_minibatch(
             src_test['data'], src['word2id'], j, config['data']['batch_size'],
             config['data']['max_src_length'], add_start=True, add_end=True
         )
 
-        input_lines_trg_gold, output_lines_trg_gold, lens_src, mask_src = get_minibatch(
-            trg_test['data'], trg['word2id'], j, config['data']['batch_size'],
-            config['data']['max_src_length'], add_start=True, add_end=True
+        # Get target minibatch
+        input_lines_trg_gold, output_lines_trg_gold, lens_src, mask_src = (
+            get_minibatch(
+                trg_test['data'], trg['word2id'], j,
+                config['data']['batch_size'], config['data']['max_trg_length'],
+                add_start=True, add_end=True
+            )
         )
 
+        # Initialize target with <s> for every sentence
         input_lines_trg = Variable(torch.LongTensor(
             [
                 [trg['word2id']['<s>']]
@@ -98,32 +129,27 @@ def evaluate_model(
             ]
         )).cuda()
 
-        for i in xrange(config['data']['max_src_length']):
+        # Decode a minibatch greedily __TODO__ add beam search decoding
+        input_lines_trg = decode_minibatch(
+            config, model, input_lines_src,
+            input_lines_trg, output_lines_trg_gold
+        )
 
-            decoder_logit = model(input_lines_src, input_lines_trg)
-            word_probs = model.decode(decoder_logit)
-            decoder_argmax = word_probs.data.cpu().numpy().argmax(axis=-1)
-            next_preds = Variable(
-                torch.from_numpy(decoder_argmax[:, -1])
-            ).cuda()
-
-            input_lines_trg = torch.cat(
-                (input_lines_trg, next_preds.unsqueeze(1)),
-                1
-            )
-
+        # Copy minibatch outputs to cpu and convert ids to words
         input_lines_trg = input_lines_trg.data.cpu().numpy()
         input_lines_trg = [
             [trg['id2word'][x] for x in line]
             for line in input_lines_trg
         ]
 
+        # Do the same for gold sentences
         output_lines_trg_gold = output_lines_trg_gold.data.cpu().numpy()
         output_lines_trg_gold = [
             [trg['id2word'][x] for x in line]
             for line in output_lines_trg_gold
         ]
 
+        # Process outputs
         for sentence_pred, sentence_real, sentence_real_src in zip(
             input_lines_trg,
             output_lines_trg_gold,
@@ -147,11 +173,6 @@ def evaluate_model(
             if verbose:
                 print '--------------------------------------'
             ground_truths.append(['<s>'] + sentence_real[:index + 1])
-
-            if '</s>' in sentence_real_src:
-                index = sentence_real_src.index('</s>')
-            else:
-                index = len(sentence_real_src)
 
     return get_bleu(preds, ground_truths)
 

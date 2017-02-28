@@ -71,16 +71,44 @@ def construct_vocab(lines, vocab_size):
 
 def read_nmt_data(src, trg=None):
     """Read data from files."""
-    src_lines = [line.strip().split() for line in open(src, 'r')]
+    print 'Reading source data ...'
+    src_lines = []
+    with open(src, 'r') as f:
+        for ind, line in enumerate(f):
+            if ind % 100000 == 0:
+                print ind
+            src_lines.append(line.strip().split())
+
+    print 'Constructing source vocabulary ...'
     src_word2id, src_id2word = construct_vocab(src_lines, 30000)
+
     src = {'data': src_lines, 'word2id': src_word2id, 'id2word': src_id2word}
+    del src_lines
 
     if trg is not None:
-        trg_lines = [line.strip().split() for line in open(trg, 'r')]
+        print 'Reading target data ...'
+        trg_lines = []
+        with open(trg, 'r') as f:
+            for line in f:
+                trg_lines.append(line.strip().split())
+
+        print 'Constructing target vocabulary ...'
         trg_word2id, trg_id2word = construct_vocab(trg_lines, 30000)
+
         trg = {'data': trg_lines, 'word2id': trg_word2id, 'id2word': trg_id2word}
     else:
         trg = None
+
+    return src, trg
+
+
+def read_summarization_data(src, trg):
+    """Read data from files."""
+    src_lines = [line.strip().split() for line in open(src, 'r')]
+    trg_lines = [line.strip().split() for line in open(trg, 'r')]
+    word2id, id2word = construct_vocab(src_lines + trg_lines, 30000)
+    src = {'data': src_lines, 'word2id': word2id, 'id2word': id2word}
+    trg = {'data': trg_lines, 'word2id': word2id, 'id2word': id2word}
 
     return src, trg
 

@@ -4,8 +4,8 @@ import sys
 
 sys.path.append('/u/subramas/Research/nmt-pytorch/')
 
-from data_utils import read_nmt_data, get_minibatch, read_config, hyperparam_string
-from model import Seq2Seq, Seq2SeqAttention, Seq2SeqFastAttention
+from data_utils import read_nmt_data, get_minibatch, read_config, hyperparam_string, read_summarization_data
+from model import Seq2Seq, Seq2SeqAttention, Seq2SeqFastAttention, Seq2SeqAttentionSharedEmbedding
 from evaluate import evaluate_model
 import math
 import numpy as np
@@ -64,16 +64,13 @@ src_test, trg_test = read_nmt_data(
 
 batch_size = config['data']['batch_size']
 max_length = config['data']['max_src_length']
-src_vocab_size = len(src['word2id'])
-trg_vocab_size = len(trg['word2id'])
+vocab_size = len(src['word2id'])
 
 logging.info('Model Parameters : ')
 logging.info('Task : %s ' % (config['data']['task']))
 logging.info('Model : %s ' % (config['model']['seq2seq']))
-logging.info('Source Language : %s ' % (config['model']['src_lang']))
-logging.info('Target Language : %s ' % (config['model']['trg_lang']))
-logging.info('Source Word Embedding Dim  : %s' % (config['model']['dim_word_src']))
-logging.info('Target Word Embedding Dim  : %s' % (config['model']['dim_word_trg']))
+logging.info('Language : %s ' % (config['model']['src_lang']))
+logging.info('Embedding Dim  : %s' % (config['model']['dim_word_src']))
 logging.info('Source RNN Hidden Dim  : %s' % (config['model']['dim']))
 logging.info('Target RNN Hidden Dim  : %s' % (config['model']['dim']))
 logging.info('Source RNN Depth : %d ' % (config['model']['n_layers_src']))
@@ -83,72 +80,38 @@ logging.info('Batch Size : %d ' % (config['model']['n_layers_trg']))
 logging.info('Optimizer : %s ' % (config['training']['optimizer']))
 logging.info('Learning Rate : %f ' % (config['training']['lrate']))
 
-logging.info('Found %d words in src ' % (src_vocab_size))
-logging.info('Found %d words in trg ' % (trg_vocab_size))
+logging.info('Found %d words ' % (vocab_size))
 
-weight_mask = torch.ones(trg_vocab_size).cuda()
+weight_mask = torch.ones(vocab_size).cuda()
 weight_mask[trg['word2id']['<pad>']] = 0
 loss_criterion = nn.CrossEntropyLoss(weight=weight_mask).cuda()
 
-if config['model']['seq2seq'] == 'vanilla':
-
-    model = Seq2Seq(
-        src_emb_dim=config['model']['dim_word_src'],
-        trg_emb_dim=config['model']['dim_word_trg'],
-        src_vocab_size=src_vocab_size,
-        trg_vocab_size=trg_vocab_size,
-        src_hidden_dim=config['model']['dim'],
-        trg_hidden_dim=config['model']['dim'],
-        batch_size=batch_size,
-        bidirectional=config['model']['bidirectional'],
-        pad_token_src=src['word2id']['<pad>'],
-        pad_token_trg=trg['word2id']['<pad>'],
-        nlayers=config['model']['n_layers_src'],
-        dropout=0.,
-    ).cuda()
-
-elif config['model']['seq2seq'] == 'attention':
-
-    model = Seq2SeqAttention(
-        src_emb_dim=config['model']['dim_word_src'],
-        trg_emb_dim=config['model']['dim_word_trg'],
-        src_vocab_size=src_vocab_size,
-        trg_vocab_size=trg_vocab_size,
-        src_hidden_dim=config['model']['dim'],
-        trg_hidden_dim=config['model']['dim'],
-        ctx_hidden_dim=config['model']['dim'],
-        attention_mode='dot',
-        batch_size=batch_size,
-        bidirectional=config['model']['bidirectional'],
-        pad_token_src=src['word2id']['<pad>'],
-        pad_token_trg=trg['word2id']['<pad>'],
-        nlayers=config['model']['n_layers_src'],
-        nlayers_trg=config['model']['n_layers_trg'],
-        dropout=0.,
-    ).cuda()
-
-elif config['model']['seq2seq'] == 'fastattention':
-
-    model = Seq2SeqFastAttention(
-        src_emb_dim=config['model']['dim_word_src'],
-        trg_emb_dim=config['model']['dim_word_trg'],
-        src_vocab_size=src_vocab_size,
-        trg_vocab_size=trg_vocab_size,
-        src_hidden_dim=config['model']['dim'],
-        trg_hidden_dim=config['model']['dim'],
-        batch_size=batch_size,
-        bidirectional=config['model']['bidirectional'],
-        pad_token_src=src['word2id']['<pad>'],
-        pad_token_trg=trg['word2id']['<pad>'],
-        nlayers=config['model']['n_layers_src'],
-        nlayers_trg=config['model']['n_layers_trg'],
-        dropout=0.,
-    ).cuda()
+model = Seq2SeqAttentionSharedEmbedding(
+    emb_dim=config['model']['dim_word_src'],
+    vocab_size=vocab_size,
+    src_hidden_dim=config['model']['dim'],
+    trg_hidden_dim=config['model']['dim'],
+    ctx_hidden_dim=config['model']['dim'],
+    attention_mode='dot',
+    batch_size=batch_size,
+    bidirectional=config['model']['bidirectional'],
+    pad_token_src=src['word2id']['<pad>'],
+    pad_token_trg=trg['word2id']['<pad>'],
+    nlayers=config['model']['n_layers_src'],
+    nlayers_trg=config['model']['n_layers_trg'],
+    dropout=0.,
+).cuda()
 
 if load_dir:
     model.load_state_dict(torch.load(
         open(load_dir)
     ))
+
+bleu = evaluate_model(
+    model, src, src_test, trg,
+    trg_test, config, verbose=False,
+    metric='bleu',
+)
 
 # __TODO__ Make this more flexible for other learning methods.
 if config['training']['optimizer'] == 'adam':
@@ -179,7 +142,7 @@ for i in xrange(1000):
         optimizer.zero_grad()
 
         loss = loss_criterion(
-            decoder_logit.contiguous().view(-1, trg_vocab_size),
+            decoder_logit.contiguous().view(-1, vocab_size),
             output_lines_trg.view(-1)
         )
         losses.append(loss.data[0])
@@ -217,35 +180,6 @@ for i in xrange(1000):
                 logging.info('Real : %s ' % (' '.join(sentence_real)))
                 logging.info('===============================================')
 
-        if j % config['management']['checkpoint_freq'] == 0:
-
-            logging.info('Evaluating model ...')
-            bleu = evaluate_model(
-                model, src, src_test, trg,
-                trg_test, config, verbose=False,
-                metric='bleu',
-            )
-
-            logging.info('Epoch : %d Minibatch : %d : BLEU : %.5f ' % (i, j, bleu))
-
-            logging.info('Saving model ...')
-
-            torch.save(
-                model.state_dict(),
-                open(os.path.join(
-                    save_dir,
-                    experiment_name + '__epoch_%d__minibatch_%d' % (i, j) + '.model'), 'wb'
-                )
-            )
-
-    bleu = evaluate_model(
-        model, src, src_test, trg,
-        trg_test, config, verbose=False,
-        metric='bleu',
-    )
-
-    logging.info('Epoch : %d : BLEU : %.5f ' % (i, bleu))
-
     torch.save(
         model.state_dict(),
         open(os.path.join(
@@ -253,3 +187,10 @@ for i in xrange(1000):
             experiment_name + '__epoch_%d' % (i) + '.model'), 'wb'
         )
     )
+
+    bleu = evaluate_model(
+        model, src, src_test, trg,
+        trg_test, config, verbose=False,
+        metric='bleu',
+    )
+    logging.info('Epoch : %d : BLEU : %.5f ' % (i, bleu))
