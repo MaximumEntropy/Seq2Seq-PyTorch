@@ -96,6 +96,47 @@ def decode_minibatch(
     return input_lines_trg
 
 
+def model_perplexity(
+    model, src, src_test, trg,
+    trg_test, config, loss_criterion,
+    src_valid=None, trg_valid=None, verbose=False,
+):
+    """Compute model perplexity."""
+    # Get source minibatch
+    losses = []
+    for j in xrange(0, len(src_test['data']) // 100, config['data']['batch_size']):
+        input_lines_src, output_lines_src, lens_src, mask_src = get_minibatch(
+            src_test['data'], src['word2id'], j, config['data']['batch_size'],
+            config['data']['max_src_length'], add_start=True, add_end=True
+        )
+        input_lines_src = Variable(input_lines_src.data, volatile=True)
+        output_lines_src = Variable(input_lines_src.data, volatile=True)
+        mask_src = Variable(mask_src.data, volatile=True)
+
+        # Get target minibatch
+        input_lines_trg_gold, output_lines_trg_gold, lens_src, mask_src = (
+            get_minibatch(
+                trg_test['data'], trg['word2id'], j,
+                config['data']['batch_size'], config['data']['max_trg_length'],
+                add_start=True, add_end=True
+            )
+        )
+        input_lines_trg_gold = Variable(input_lines_trg_gold.data, volatile=True)
+        output_lines_trg_gold = Variable(output_lines_trg_gold.data, volatile=True)
+        mask_src = Variable(mask_src.data, volatile=True)
+
+        decoder_logit = model(input_lines_src, input_lines_trg_gold)
+
+        loss = loss_criterion(
+            decoder_logit.contiguous().view(-1, decoder_logit.size(2)),
+            output_lines_trg_gold.view(-1)
+        )
+
+        losses.append(loss.data[0])
+
+    return np.exp(np.mean(losses))
+
+
 def evaluate_model(
     model, src, src_test, trg,
     trg_test, config, src_valid=None, trg_valid=None,
