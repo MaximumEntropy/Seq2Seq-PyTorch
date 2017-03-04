@@ -54,11 +54,13 @@ print 'Reading data ...'
 
 src, trg = read_nmt_data(
     src=config['data']['src'],
+    config=config,
     trg=config['data']['trg']
 )
 
 src_test, trg_test = read_nmt_data(
     src=config['data']['test_src'],
+    config=config,
     trg=config['data']['test_trg']
 )
 
@@ -104,6 +106,7 @@ if config['model']['seq2seq'] == 'vanilla':
         pad_token_src=src['word2id']['<pad>'],
         pad_token_trg=trg['word2id']['<pad>'],
         nlayers=config['model']['n_layers_src'],
+        nlayers_trg=config['model']['n_layers_trg'],
         dropout=0.,
     ).cuda()
 

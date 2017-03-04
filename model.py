@@ -445,6 +445,7 @@ class Seq2Seq(nn.Module):
             batch_first=True,
             dropout=self.dropout
         )
+
         self.decoder = nn.LSTM(
             trg_emb_dim,
             trg_hidden_dim,
@@ -520,10 +521,12 @@ class Seq2Seq(nn.Module):
                 )
             )
         )
+
         trg_h_reshape = trg_h.contiguous().view(
             trg_h.size(0) * trg_h.size(1),
             trg_h.size(2)
         )
+
         decoder_logit = self.decoder2vocab(trg_h_reshape)
         decoder_logit = decoder_logit.view(
             trg_h.size(0),
@@ -770,14 +773,8 @@ class Seq2SeqAttention(nn.Module):
             dropout=self.dropout
         )
 
-        self.decoder1 = LSTMAttentionDot(
+        self.decoder = LSTMAttentionDot(
             trg_emb_dim,
-            trg_hidden_dim,
-            batch_first=True
-        )
-
-        self.decoder2 = LSTMAttentionDot(
-            trg_hidden_dim,
             trg_hidden_dim,
             batch_first=True
         )
@@ -836,15 +833,8 @@ class Seq2SeqAttention(nn.Module):
 
         ctx = src_h.transpose(0, 1)
 
-        trg_h, (_, _) = self.decoder1(
+        trg_h, (_, _) = self.decoder(
             trg_emb,
-            (decoder_init_state, c_t),
-            ctx,
-            ctx_mask
-        )
-
-        trg_h, (_, _) = self.decoder2(
-            trg_h,
             (decoder_init_state, c_t),
             ctx,
             ctx_mask
@@ -915,6 +905,7 @@ class Seq2SeqAttentionSharedEmbedding(nn.Module):
 
         self.src_hidden_dim = src_hidden_dim // 2 \
             if self.bidirectional else src_hidden_dim
+
         self.encoder = nn.LSTM(
             emb_dim,
             self.src_hidden_dim,
@@ -949,11 +940,13 @@ class Seq2SeqAttentionSharedEmbedding(nn.Module):
         """Get cell states and hidden states."""
         batch_size = input.size(0) \
             if self.encoder.batch_first else input.size(1)
+
         h0_encoder = Variable(torch.zeros(
             self.encoder.num_layers * self.num_directions,
             batch_size,
             self.src_hidden_dim
         ), requires_grad=False)
+
         c0_encoder = Variable(torch.zeros(
             self.encoder.num_layers * self.num_directions,
             batch_size,
@@ -979,6 +972,7 @@ class Seq2SeqAttentionSharedEmbedding(nn.Module):
         else:
             h_t = src_h_t[-1]
             c_t = src_c_t[-1]
+
         decoder_init_state = nn.Tanh()(self.encoder2decoder(h_t))
 
         ctx = src_h.transpose(0, 1)
@@ -989,10 +983,12 @@ class Seq2SeqAttentionSharedEmbedding(nn.Module):
             ctx,
             ctx_mask
         )
+
         trg_h_reshape = trg_h.contiguous().view(
             trg_h.size()[0] * trg_h.size()[1],
             trg_h.size()[2]
         )
+
         decoder_logit = self.decoder2vocab(trg_h_reshape)
         decoder_logit = decoder_logit.view(
             trg_h.size()[0],
