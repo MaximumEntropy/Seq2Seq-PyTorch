@@ -504,6 +504,7 @@ class Seq2Seq(nn.Module):
         else:
             h_t = src_h_t[-1]
             c_t = src_c_t[-1]
+
         decoder_init_state = nn.Tanh()(self.encoder2decoder(h_t))
 
         trg_h, (_, _) = self.decoder(
