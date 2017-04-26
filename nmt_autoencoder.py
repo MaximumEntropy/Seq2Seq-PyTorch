@@ -147,7 +147,7 @@ for i in xrange(1000):
     losses = []
     for j in xrange(0, len(src['data']), batch_size):
 
-        input_lines_src, lens_src, mask_src = get_autoencode_minibatch(
+        input_lines_src, output_lines_src, lens_src, mask_src = get_autoencode_minibatch(
             src['data'], src['word2id'], j,
             batch_size, max_length, add_start=True, add_end=True
         )
@@ -157,7 +157,7 @@ for i in xrange(1000):
 
         loss = loss_criterion(
             decoder_logit.contiguous().view(-1, src_vocab_size),
-            input_lines_src.view(-1)
+            output_lines_src.view(-1)
         )
         losses.append(loss.data[0])
         loss.backward()

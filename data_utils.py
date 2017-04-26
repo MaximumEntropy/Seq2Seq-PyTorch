@@ -150,6 +150,124 @@ def read_summarization_data(src, trg):
     return src, trg
 
 
+def get_dialog_minibatch(
+    lines, word2ind, index, batch_size,
+    max_len, add_start=True, add_end=False
+):
+    """Prepare minibatch for dialog.
+
+    Separate minibatch generator for dialog tasks since we want to prune
+    the begining and not the end of the context. The end of the context is
+    what is most important.
+    """
+    # Truncate minibatch based on the lengths of each utterance in context
+    truncated_lines = []
+    for line in lines:
+        if len(line) <= max_len:
+            truncated_lines.append(line)
+            continue
+
+        utterances = []
+        current_utterance = []
+        for word in line:
+            if word == '</s>':
+                current_utterance.append(word)
+                utterances.append(current_utterance)
+                current_utterance = []
+            else:
+                current_utterance.append(word)
+
+        utterances = utterances[::-1]
+        if len(utterances[0]) > max_len:
+            truncated_lines.append(utterances[0][:max_len])
+            continue
+
+        curr_length = 0
+        idx = 0
+        curr_truncated_line = []
+        while True:
+            if curr_length + len(utterances[idx]) < max_len:
+                curr_truncated_line += utterances[idx]
+                # print 'Curr vs utterance length', curr_length, len(utterances[idx])
+                curr_length += len(utterances[idx])
+                idx += 1
+            else:
+                # print 'Idx vs utterance length', idx, len(utterances)
+                truncated_lines.append(curr_truncated_line)
+                break
+
+    print ' '.join(lines[0])
+    print '-------------------------------------'
+    print ' '.join(truncated_lines[0])
+    print '====================================='
+    print ' '.join(lines[1])
+    print '-------------------------------------'
+    print ' '.join(truncated_lines[1])
+    print '====================================='
+    print ' '.join(lines[2])
+    print '-------------------------------------'
+    print ' '.join(truncated_lines[2])
+    print '====================================='
+    print ' '.join(lines[3])
+    print '-------------------------------------'
+    print ' '.join(truncated_lines[3])
+    print '====================================='
+    print ' '.join(lines[4])
+    print '-------------------------------------'
+    print ' '.join(truncated_lines[4])
+    print '====================================='
+
+    lines = truncated_lines[::-1]
+
+    if add_start and add_end:
+        lines = [
+            ['<s>'] + line + ['</s>']
+            for line in lines[index:index + batch_size]
+        ]
+    elif add_start and not add_end:
+        lines = [
+            ['<s>'] + line
+            for line in lines[index:index + batch_size]
+        ]
+    elif not add_start and add_end:
+        lines = [
+            line + ['</s>']
+            for line in lines[index:index + batch_size]
+        ]
+    elif not add_start and not add_end:
+        lines = [
+            line
+            for line in lines[index:index + batch_size]
+        ]
+    lines = [line[:max_len] for line in lines]
+
+    lens = [len(line) for line in lines]
+    max_len = max(lens)
+
+    input_lines = [
+        [word2ind[w] if w in word2ind else word2ind['<unk>'] for w in line[:-1]] +
+        [word2ind['<pad>']] * (max_len - len(line))
+        for line in lines
+    ]
+
+    output_lines = [
+        [word2ind[w] if w in word2ind else word2ind['<unk>'] for w in line[1:]] +
+        [word2ind['<pad>']] * (max_len - len(line))
+        for line in lines
+    ]
+
+    mask = [
+        ([1] * (l - 1)) + ([0] * (max_len - l))
+        for l in lens
+    ]
+
+    input_lines = Variable(torch.LongTensor(input_lines)).cuda()
+    output_lines = Variable(torch.LongTensor(output_lines)).cuda()
+    mask = Variable(torch.FloatTensor(mask)).cuda()
+
+    return input_lines, output_lines, lens, mask
+
+
 def get_minibatch(
     lines, word2ind, index, batch_size,
     max_len, add_start=True, add_end=True
@@ -235,7 +353,13 @@ def get_autoencode_minibatch(
     max_len = max(lens)
 
     input_lines = [
-        [word2ind[w] if w in word2ind else word2ind['<unk>'] for w in line] +
+        [word2ind[w] if w in word2ind else word2ind['<unk>'] for w in line[:-1]] +
+        [word2ind['<pad>']] * (max_len - len(line))
+        for line in lines
+    ]
+
+    output_lines = [
+        [word2ind[w] if w in word2ind else word2ind['<unk>'] for w in line[1:]] +
         [word2ind['<pad>']] * (max_len - len(line))
         for line in lines
     ]
@@ -246,6 +370,7 @@ def get_autoencode_minibatch(
     ]
 
     input_lines = Variable(torch.LongTensor(input_lines)).cuda()
+    output_lines = Variable(torch.LongTensor(output_lines)).cuda()
     mask = Variable(torch.FloatTensor(mask)).cuda()
 
-    return input_lines, lens, mask
+    return input_lines, output_lines, lens, mask
