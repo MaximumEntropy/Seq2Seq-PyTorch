@@ -250,7 +250,18 @@ class Seq2SeqAttention(nn.Module):
         '''
 
     def forward(self, input_src, input_trg, src_lengths):
-        """Propogate input through the network."""
+        r"""Propogate input through the layer.
+
+        inputs: input_src, input_trg
+        input_src     - batch size x source sequence length x \
+            embedding dimension
+        input_trg     - batch size x target sequence length x \
+            embedding dimension
+        src_lengths   - batch size (list)
+
+        returns: decoder_logit (pre-softmax distribution over words)
+        decoder_logit - batch size x target sequence length x target vocab size
+        """
         src_emb = self.src_embedding(input_src)
         trg_emb = self.trg_embedding(input_trg)
 

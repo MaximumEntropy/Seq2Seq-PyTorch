@@ -6,19 +6,6 @@ import json
 import numpy as np
 
 
-class Minibatch(object):
-    """Parallel data minibatch."""
-
-    def __init__(
-        self, src_input, trg_input, trg_output, src_lens
-    ):
-        """Initialize parameters."""
-        self.src_input = src_input
-        self.trg_input = trg_input
-        self.trg_output = trg_output
-        self.src_lens = src_lens
-
-
 def hyperparam_string(config):
     """Hyerparam string."""
     exp_name = ''
@@ -202,10 +189,12 @@ def get_parallel_minibatch(
     input_lines_trg = Variable(torch.LongTensor(input_lines_trg)).cuda()
     output_lines_trg = Variable(torch.LongTensor(output_lines_trg)).cuda()
 
-    return Minibatch(
-        input_lines_src, input_lines_trg,
-        output_lines_trg, sorted_src_lens
-    )
+    return {
+        'input_src': input_lines_src,
+        'input_trg': input_lines_trg,
+        'output_trg': output_lines_trg,
+        'src_lens': sorted_src_lens
+    }
 
 
 def get_minibatch(

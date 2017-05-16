@@ -188,13 +188,15 @@ for i in range(1000):
         )
 
         decoder_logit = model(
-            minibatch.src_input, minibatch.trg_input, minibatch.src_lens
+            minibatch['input_src'],
+            minibatch['input_trg'],
+            minibatch['src_lens']
         )
         optimizer.zero_grad()
 
         loss = loss_criterion(
             decoder_logit.contiguous().view(-1, trg_vocab_size),
-            minibatch.trg_output.view(-1)
+            minibatch['output_trg'].view(-1)
         )
         losses.append(loss.data[0])
         loss.backward()
