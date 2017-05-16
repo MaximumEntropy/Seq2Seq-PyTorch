@@ -131,13 +131,13 @@ class SoftAttention(nn.Module):
 
         # Get attention
         attn = torch.bmm(ctx, target).squeeze(2)  # batch x sourceL
-        attn = self.sm(attn)
+        attn = F.softmax(attn)
         attn3 = attn.view(attn.size(0), 1, attn.size(1))  # batch x 1 x sourceL
 
         weighted_context = torch.bmm(attn3, ctx).squeeze(1)  # batch x dim
         h_tilde = torch.cat((weighted_context, input), 1)
 
-        h_tilde = self.tanh(self.linear_out(h_tilde))
+        h_tilde = F.tanh(self.linear_out(h_tilde))
 
         return h_tilde, attn
 
