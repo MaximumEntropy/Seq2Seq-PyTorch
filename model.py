@@ -270,7 +270,9 @@ class Seq2SeqAttention(nn.Module):
 
         ctx = src_h.transpose(0, 1)
 
-        trg_h, (_, _) = self.decoder(trg_emb, (decoder_init_state, c_t), ctx)
+        trg_h, (_, _), att = self.decoder(
+            trg_emb, (decoder_init_state, c_t), ctx
+        )
 
         trg_h_reshape = trg_h.contiguous().view(
             trg_h.size(0) * trg_h.size(1), trg_h.size(2)[2]
@@ -451,4 +453,3 @@ class Seq2SeqFastAttention(nn.Module):
             logits.size()[0], logits.size()[1], logits.size()[2]
         )
         return word_probs
-

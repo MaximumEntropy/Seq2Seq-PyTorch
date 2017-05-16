@@ -166,8 +166,8 @@ def get_parallel_minibatch(
     index, batch_size, max_len_src, max_len_trg
 ):
     """Prepare minibatch."""
-    src_lines = [line[:max_len_src] for line in src_lines]
-    trg_lines = [line[:max_len_trg] for line in trg_lines]
+    src_lines = [['<s>'] + line[:max_len_src] + ['</s>'] for line in src_lines]
+    trg_lines = [['<s>'] + line[:max_len_trg] + ['</s>'] for line in trg_lines]
 
     src_lens = [len(line) for line in src_lines]
     sorted_indices = np.argsort(src_lens)[::-1]
@@ -183,7 +183,7 @@ def get_parallel_minibatch(
     input_lines_src = [
         [src_word2id[w] if w in src_word2id else src_word2id['<unk>'] for w in line] +
         [src_word2id['<pad>']] * (max_src_len - len(line))
-        for line in sorted_src_lens
+        for line in sorted_src_lines
     ]
 
     input_lines_trg = [

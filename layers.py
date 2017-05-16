@@ -41,7 +41,7 @@ class StackedAttentionLSTM(nn.Module):
         h_0, c_0 = hidden
         h_1, c_1 = [], []
         for idx, rnn in enumerate(self.rnns):
-            output, (h_1_i, c_1_i) = rnn(input, (h_0, c_0), ctx)
+            output, (h_1_i, c_1_i), att = rnn(input, (h_0, c_0), ctx)
             input = output
 
             if idx != len(self.layers):
@@ -53,7 +53,7 @@ class StackedAttentionLSTM(nn.Module):
         h_1 = torch.stack(h_1)
         c_1 = torch.stack(c_1)
 
-        return input, (h_1, c_1)
+        return input, (h_1, c_1), att
 
 
 class DeepBidirectionalLSTM(nn.Module):
@@ -201,4 +201,4 @@ class LSTMAttention(nn.Module):
         alphas = torch.cat(alphas, 0)
         output = output.transpose(0, 1)
         alphas = alphas.transpose(0, 1)
-        return output, hidden
+        return output, hidden, alphas
