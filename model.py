@@ -286,7 +286,7 @@ class Seq2SeqAttention(nn.Module):
         )
 
         trg_h_reshape = trg_h.contiguous().view(
-            trg_h.size(0) * trg_h.size(1), trg_h.size(2)[2]
+            trg_h.size(0) * trg_h.size(1), trg_h.size(2)
         )
 
         decoder_logit = self.decoder2vocab(trg_h_reshape)
@@ -450,9 +450,9 @@ class Seq2SeqFastAttention(nn.Module):
 
         decoder_logit = self.decoder2vocab(trg_h_reshape)
         decoder_logit = decoder_logit.view(
-            trg_h.size()[0],
-            trg_h.size()[1],
-            decoder_logit.size()[1]
+            trg_h.size(0),
+            trg_h.size(1),
+            decoder_logit.size(1)
         )
         return decoder_logit
 
@@ -461,6 +461,6 @@ class Seq2SeqFastAttention(nn.Module):
         logits_reshape = logits.view(-1, self.trg_vocab_size)
         word_probs = F.softmax(logits_reshape)
         word_probs = word_probs.view(
-            logits.size()[0], logits.size()[1], logits.size()[2]
+            logits.size(0), logits.size(1), logits.size(2)
         )
         return word_probs
