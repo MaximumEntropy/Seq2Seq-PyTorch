@@ -61,14 +61,13 @@ class DeepBidirectionalLSTM(nn.Module):
 
     def __init__(
         self, input_dim, hidden_dim,
-        num_layers, dropout, batch_first
+        num_layers, dropout
     ):
         """Initialize params."""
         super(DeepBidirectionalLSTM, self).__init__()
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
         self.dropout = dropout
-        self.batch_first = batch_first
         self.num_layers = num_layers
 
         self.bilstm = nn.LSTM(
@@ -187,19 +186,19 @@ class LSTMAttention(nn.Module):
             hy = outgate * F.tanh(cy)  # n_b x hidden_dim
             h_tilde, alpha = self.attention_layer(hy, ctx.transpose(0, 1))
 
-            return h_tilde, cy, alpha
+            return (h_tilde, cy), alpha
 
         input = input.transpose(0, 1)
 
         output = []
+        alphas = []
         steps = range(input.size(0))
         for i in steps:
-            hidden = recurrence(input[i], hidden)
+            hidden, alpha = recurrence(input[i], hidden)
             output.append(isinstance(hidden, tuple) and hidden[0] or hidden)
-
+            alphas.append(alpha)
         output = torch.cat(output, 0).view(input.size(0), *output[0].size())
-
-        if self.batch_first:
-            output = output.transpose(0, 1)
-
+        alphas = torch.cat(alphas, 0)
+        output = output.transpose(0, 1)
+        alphas = alphas.transpose(0, 1)
         return output, hidden

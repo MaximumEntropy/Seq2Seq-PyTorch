@@ -85,6 +85,7 @@ class Seq2Seq(nn.Module):
         self.trg_embedding.weight.data.uniform_(-initrange, initrange)
         self.encoder2decoder.bias.data.fill_(0)
         self.decoder2vocab.bias.data.fill_(0)
+        '''
         nn.init.xavier_normal(
             self.encoder2decoder.weight,
             gain=nn.init.calculate_gain('tanh')
@@ -93,6 +94,7 @@ class Seq2Seq(nn.Module):
             self.decoder2vocab.weight,
             gain=nn.init.calculate_gain('sigmoid')
         )
+        '''
 
     def forward(self, input_src, input_trg, src_lengths):
         r"""Propogate input through the network.
@@ -236,6 +238,7 @@ class Seq2SeqAttention(nn.Module):
         self.trg_embedding.weight.data.uniform_(-initrange, initrange)
         self.encoder2decoder.bias.data.fill_(0)
         self.decoder2vocab.bias.data.fill_(0)
+        '''
         nn.init.xavier_normal(
             self.encoder2decoder.weight,
             gain=nn.init.calculate_gain('tanh')
@@ -244,6 +247,7 @@ class Seq2SeqAttention(nn.Module):
             self.decoder2vocab.weight,
             gain=nn.init.calculate_gain('sigmoid')
         )
+        '''
 
     def forward(self, input_src, input_trg, src_lengths):
         """Propogate input through the network."""
@@ -365,6 +369,7 @@ class Seq2SeqFastAttention(nn.Module):
         self.trg_embedding.weight.data.uniform_(-initrange, initrange)
         self.encoder2decoder.bias.data.fill_(0)
         self.decoder2vocab.bias.data.fill_(0)
+        '''
         nn.init.xavier_normal(
             self.encoder2decoder.weight,
             gain=nn.init.calculate_gain('tanh')
@@ -373,6 +378,7 @@ class Seq2SeqFastAttention(nn.Module):
             self.decoder2vocab.weight,
             gain=nn.init.calculate_gain('sigmoid')
         )
+        '''
 
     def forward(self, input_src, input_trg, src_lengths):
         r"""Propogate input through the network.
