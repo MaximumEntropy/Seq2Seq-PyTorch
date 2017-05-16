@@ -42,14 +42,12 @@ class Seq2Seq(nn.Module):
             num_embedding=src_vocab_size,
             embedding_dim=src_emb_dim,
             padding_idx=self.pad_token_src,
-            sparse=True
         )
 
         self.trg_embedding = nn.Embedding(
             num_embedding=trg_vocab_size,
             embedding_dim=trg_emb_dim,
             padding_idx=self.pad_token_trg,
-            sparse=True
         )
 
         self.encoder = nn.LSTM(
@@ -196,13 +194,11 @@ class Seq2SeqAttention(nn.Module):
             src_vocab_size,
             src_emb_dim,
             self.pad_token_src,
-            sparse=True
         )
         self.trg_embedding = nn.Embedding(
             trg_vocab_size,
             trg_emb_dim,
             self.pad_token_trg,
-            sparse=True
         )
 
         self.src_hidden_dim = src_hidden_dim // 2 \
@@ -337,13 +333,11 @@ class Seq2SeqFastAttention(nn.Module):
             src_vocab_size,
             src_emb_dim,
             self.pad_token_src,
-            sparse=True
         )
         self.trg_embedding = nn.Embedding(
             trg_vocab_size,
             trg_emb_dim,
             self.pad_token_trg,
-            sparse=True
         )
 
         self.src_hidden_dim = src_hidden_dim // 2 \
