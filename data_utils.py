@@ -95,19 +95,19 @@ def construct_vocab(lines, vocab_size):
 
 def read_dialog_summarization_data(src, config, trg):
     """Read data from files."""
-    print 'Reading source data ...'
+    print('Reading source data ...')
     src_lines = []
     with open(src, 'r') as f:
         for ind, line in enumerate(f):
             src_lines.append(line.strip().split())
 
-    print 'Reading target data ...'
+    print('Reading target data ...')
     trg_lines = []
     with open(trg, 'r') as f:
         for line in f:
             trg_lines.append(line.strip().split())
 
-    print 'Constructing common vocabulary ...'
+    print('Constructing common vocabulary ...')
     word2id, id2word = construct_vocab(
         src_lines + trg_lines, config['data']['n_words_src']
     )
@@ -120,13 +120,13 @@ def read_dialog_summarization_data(src, config, trg):
 
 def read_parallel_data(src, trg, config):
     """Read data from files."""
-    print 'Reading source data ...'
+    print('Reading source data ...')
     src_lines = []
     with open(src, 'r') as f:
         for ind, line in enumerate(f):
             src_lines.append(line.strip().split())
 
-    print 'Constructing source vocabulary ...'
+    print('Constructing source vocabulary ...')
     src_word2id, src_id2word = construct_vocab(
         src_lines, config['data']['n_words_src']
     )
@@ -134,13 +134,13 @@ def read_parallel_data(src, trg, config):
     src = {'data': src_lines, 'word2id': src_word2id, 'id2word': src_id2word}
     del src_lines
 
-    print 'Reading target data ...'
+    print('Reading target data ...')
     trg_lines = []
     with open(trg, 'r') as f:
         for line in f:
             trg_lines.append(line.strip().split())
 
-    print 'Constructing target vocabulary ...'
+    print('Constructing target vocabulary ...')
     trg_word2id, trg_id2word = construct_vocab(
         trg_lines, config['data']['n_words_trg']
     )
