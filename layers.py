@@ -42,13 +42,10 @@ class StackedAttentionLSTM(nn.Module):
         h_1, c_1 = [], []
         for idx, rnn in enumerate(self.rnns):
             output, (h_1_i, c_1_i), att = rnn(input, (h_0, c_0), ctx)
+
             input = output
-
-            if idx != len(self.layers):
-                input = self.dropout(input)
-
-            h_1 += [h_1_i]
-            c_1 += [c_1_i]
+            h_1.append(h_1_i)
+            c_1.append(c_1_i)
 
         h_1 = torch.stack(h_1)
         c_1 = torch.stack(c_1)
