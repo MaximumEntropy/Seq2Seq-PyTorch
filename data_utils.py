@@ -3,6 +3,20 @@ import torch
 from torch.autograd import Variable
 import operator
 import json
+import numpy as np
+
+
+class Minibatch(object):
+    """Parallel data minibatch."""
+
+    def __init__(
+        self, src_input, trg_input, trg_output, src_lens
+    ):
+        """Initialize parameters."""
+        self.src_input = src_input
+        self.trg_input = trg_input
+        self.trg_output = trg_output
+        self.src_lens = src_lens
 
 
 def hyperparam_string(config):
@@ -104,7 +118,7 @@ def read_dialog_summarization_data(src, config, trg):
     return src, trg
 
 
-def read_nmt_data(src, config, trg=None):
+def read_parallel_data(src, trg, config):
     """Read data from files."""
     print 'Reading source data ...'
     src_lines = []
@@ -120,21 +134,18 @@ def read_nmt_data(src, config, trg=None):
     src = {'data': src_lines, 'word2id': src_word2id, 'id2word': src_id2word}
     del src_lines
 
-    if trg is not None:
-        print 'Reading target data ...'
-        trg_lines = []
-        with open(trg, 'r') as f:
-            for line in f:
-                trg_lines.append(line.strip().split())
+    print 'Reading target data ...'
+    trg_lines = []
+    with open(trg, 'r') as f:
+        for line in f:
+            trg_lines.append(line.strip().split())
 
-        print 'Constructing target vocabulary ...'
-        trg_word2id, trg_id2word = construct_vocab(
-            trg_lines, config['data']['n_words_trg']
-        )
+    print 'Constructing target vocabulary ...'
+    trg_word2id, trg_id2word = construct_vocab(
+        trg_lines, config['data']['n_words_trg']
+    )
 
-        trg = {'data': trg_lines, 'word2id': trg_word2id, 'id2word': trg_id2word}
-    else:
-        trg = None
+    trg = {'data': trg_lines, 'word2id': trg_word2id, 'id2word': trg_id2word}
 
     return src, trg
 
@@ -148,6 +159,53 @@ def read_summarization_data(src, trg):
     trg = {'data': trg_lines, 'word2id': word2id, 'id2word': id2word}
 
     return src, trg
+
+
+def get_parallel_minibatch(
+    src_lines, trg_lines, src_word2id, trg_word2id,
+    index, batch_size, max_len_src, max_len_trg
+):
+    """Prepare minibatch."""
+    src_lines = [line[:max_len_src] for line in src_lines]
+    trg_lines = [line[:max_len_trg] for line in trg_lines]
+
+    src_lens = [len(line) for line in src_lines]
+    sorted_indices = np.argsort(src_lens)[::-1]
+
+    sorted_src_lines = [src_lines[idx] for idx in sorted_indices]
+    sorted_trg_lines = [trg_lines[idx] for idx in sorted_indices]
+    sorted_src_lens = [len(line) for line in sorted_src_lines]
+    sorted_trg_lens = [len(line) for line in sorted_trg_lines]
+
+    max_src_len = max(sorted_src_lens)
+    max_trg_len = max(sorted_trg_lens)
+
+    input_lines_src = [
+        [src_word2id[w] if w in src_word2id else src_word2id['<unk>'] for w in line] +
+        [src_word2id['<pad>']] * (max_src_len - len(line))
+        for line in sorted_src_lens
+    ]
+
+    input_lines_trg = [
+        [trg_word2id[w] if w in trg_word2id else trg_word2id['<unk>'] for w in line[:-1]] +
+        [trg_word2id['<pad>']] * (max_trg_len - len(line))
+        for line in sorted_trg_lines
+    ]
+
+    output_lines_trg = [
+        [trg_word2id[w] if w in trg_word2id else trg_word2id['<unk>'] for w in line[1:]] +
+        [trg_word2id['<pad>']] * (max_trg_len - len(line))
+        for line in sorted_trg_lines
+    ]
+
+    input_lines_src = Variable(torch.LongTensor(input_lines_src)).cuda()
+    input_lines_trg = Variable(torch.LongTensor(input_lines_trg)).cuda()
+    output_lines_trg = Variable(torch.LongTensor(output_lines_trg)).cuda()
+
+    return Minibatch(
+        input_lines_src, input_lines_trg,
+        output_lines_trg, sorted_src_lens
+    )
 
 
 def get_minibatch(
