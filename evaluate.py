@@ -6,7 +6,7 @@ sys.path.append('/u/subramas/Research/nmt-pytorch')
 import torch
 import torch.nn.functional as F
 from torch.autograd import Variable
-from data_utils import get_minibatch, get_autoencode_minibatch
+from data_utils import get_minibatch, get_autoencode_minibatch, get_parallel_minibatch
 from collections import Counter
 import math
 import numpy as np
@@ -76,12 +76,12 @@ def decode_minibatch(
     model,
     input_lines_src,
     input_lines_trg,
-    output_lines_trg_gold
+    src_lengths
 ):
     """Decode a minibatch."""
     for i in range(config['data']['max_trg_length']):
 
-        decoder_logit = model(input_lines_src, input_lines_trg)
+        decoder_logit = model(input_lines_src, input_lines_trg, src_lengths)
         word_probs = model.decode(decoder_logit)
         decoder_argmax = word_probs.data.cpu().numpy().argmax(axis=-1)
         next_preds = Variable(
@@ -147,33 +147,24 @@ def evaluate_model(
     ground_truths = []
     for j in range(0, len(src_test['data']), config['data']['batch_size']):
 
-        # Get source minibatch
-        input_lines_src, output_lines_src, lens_src, mask_src = get_minibatch(
-            src_test['data'], src['word2id'], j, config['data']['batch_size'],
-            config['data']['max_src_length'], add_start=True, add_end=True
-        )
-
-        # Get target minibatch
-        input_lines_trg_gold, output_lines_trg_gold, lens_src, mask_src = (
-            get_minibatch(
-                trg_test['data'], trg['word2id'], j,
-                config['data']['batch_size'], config['data']['max_trg_length'],
-                add_start=True, add_end=True
-            )
+        minibatch = get_parallel_minibatch(
+            src['data'], trg['data'], src['word2id'], trg['word2id'], j,
+            config['data']['batch_size'], config['data']['max_src_length'], 
+            config['data']['max_trg_length']
         )
 
         # Initialize target with <s> for every sentence
         input_lines_trg = Variable(torch.LongTensor(
             [
                 [trg['word2id']['<s>']]
-                for i in range(input_lines_src.size(0))
+                for i in range(minibatch['input_src'].size(0))
             ]
         )).cuda()
 
         # Decode a minibatch greedily __TODO__ add beam search decoding
         input_lines_trg = decode_minibatch(
-            config, model, input_lines_src,
-            input_lines_trg, output_lines_trg_gold
+            config, model, minibatch['input_src'],
+            input_lines_trg, minibatch['src_lens']
         )
 
         # Copy minibatch outputs to cpu and convert ids to words
@@ -184,7 +175,7 @@ def evaluate_model(
         ]
 
         # Do the same for gold sentences
-        output_lines_trg_gold = output_lines_trg_gold.data.cpu().numpy()
+        output_lines_trg_gold = minibatch['output_trg'].data.cpu().numpy()
         output_lines_trg_gold = [
             [trg['id2word'][x] for x in line]
             for line in output_lines_trg_gold
@@ -194,26 +185,26 @@ def evaluate_model(
         for sentence_pred, sentence_real, sentence_real_src in zip(
             input_lines_trg,
             output_lines_trg_gold,
-            output_lines_src
+            minibatch['input_src']
         ):
             if '</s>' in sentence_pred:
                 index = sentence_pred.index('</s>')
             else:
                 index = len(sentence_pred)
-            preds.append(['<s>'] + sentence_pred[:index + 1])
+            preds.append(sentence_pred[:index])
 
             if verbose:
-                print(' '.join(['<s>'] + sentence_pred[:index + 1]))
+                print(' '.join(sentence_pred[:index]))
 
             if '</s>' in sentence_real:
                 index = sentence_real.index('</s>')
             else:
                 index = len(sentence_real)
             if verbose:
-                print(' '.join(['<s>'] + sentence_real[:index + 1]))
+                print(' '.join(sentence_real[:index]))
             if verbose:
                 print('--------------------------------------')
-            ground_truths.append(['<s>'] + sentence_real[:index + 1])
+            ground_truths.append(sentence_real[:index])
 
     return get_bleu(preds, ground_truths)
 
