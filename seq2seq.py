@@ -216,7 +216,7 @@ for i in range(1000):
                 decoder_logit
             ).data.cpu().numpy().argmax(axis=-1)
 
-            trg_output = minibatch.trg_output.data.cpu().numpy()
+            trg_output = minibatch['output_trg'].data.cpu().numpy()
 
             for sentence_pred, sentence_real in zip(
                 word_probs[:5], trg_output[:5]
