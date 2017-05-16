@@ -187,7 +187,9 @@ for i in range(1000):
             j, batch_size, max_length_src, max_length_trg
         )
 
-        decoder_logit = model(minibatch.src_input, minibatch.trg_input)
+        decoder_logit = model(
+            minibatch.src_input, minibatch.trg_input, minibatch.src_lens
+        )
         optimizer.zero_grad()
 
         loss = loss_criterion(
