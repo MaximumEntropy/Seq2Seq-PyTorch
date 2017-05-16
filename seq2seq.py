@@ -116,7 +116,7 @@ if config['model']['seq2seq'] == 'vanilla':
         bidirectional=config['model']['bidirectional'],
         pad_token_src=src['word2id']['<pad>'],
         pad_token_trg=trg['word2id']['<pad>'],
-        nlayers=config['model']['n_layers_src'],
+        nlayers_src=config['model']['n_layers_src'],
         nlayers_trg=config['model']['n_layers_trg'],
         dropout=0.,
     ).cuda()
@@ -130,13 +130,11 @@ elif config['model']['seq2seq'] == 'attention':
         trg_vocab_size=trg_vocab_size,
         src_hidden_dim=config['model']['dim'],
         trg_hidden_dim=config['model']['dim'],
-        ctx_hidden_dim=config['model']['dim'],
-        attention_mode='dot',
         batch_size=batch_size,
         bidirectional=config['model']['bidirectional'],
         pad_token_src=src['word2id']['<pad>'],
         pad_token_trg=trg['word2id']['<pad>'],
-        nlayers=config['model']['n_layers_src'],
+        nlayers_src=config['model']['n_layers_src'],
         nlayers_trg=config['model']['n_layers_trg'],
         dropout=0.,
     ).cuda()
@@ -154,7 +152,7 @@ elif config['model']['seq2seq'] == 'fastattention':
         bidirectional=config['model']['bidirectional'],
         pad_token_src=src['word2id']['<pad>'],
         pad_token_trg=trg['word2id']['<pad>'],
-        nlayers=config['model']['n_layers_src'],
+        nlayers_src=config['model']['n_layers_src'],
         nlayers_trg=config['model']['n_layers_trg'],
         dropout=0.,
     ).cuda()
@@ -180,9 +178,9 @@ elif config['training']['optimizer'] == 'sgd':
 else:
     raise NotImplementedError("Learning method not recommend for task")
 
-for i in xrange(1000):
+for i in range(1000):
     losses = []
-    for j in xrange(0, len(src['data']), batch_size):
+    for j in range(0, len(src['data']), batch_size):
 
         minibatch = get_parallel_minibatch(
             src['data'], trg['data'], src['word2id'], trg['word2id'],

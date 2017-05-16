@@ -219,7 +219,6 @@ class Seq2SeqAttention(nn.Module):
             trg_emb_dim,
             trg_hidden_dim,
             self.nlayers_trg,
-            dropout=self.dropout
         )
 
         self.encoder2decoder = nn.Linear(
@@ -446,3 +445,4 @@ class Seq2SeqFastAttention(nn.Module):
             logits.size()[0], logits.size()[1], logits.size()[2]
         )
         return word_probs
+

@@ -7,21 +7,17 @@ import torch.nn.functional as F
 class StackedAttentionLSTM(nn.Module):
     """Stacked LSTMs with Attention."""
 
-    def __init__(
-        self, input_dim, hidden_dim,
-        num_layers, dropout=0.
-    ):
+    def __init__(self, input_dim, hidden_dim, num_layers):
         """Initialize params."""
         super(StackedAttentionLSTM, self).__init__()
-        self.dropout = dropout
         self.input_size = input_dim
         self.rnn_size = hidden_dim
         self.num_layers = num_layers
 
         # Stack RNNs on top of each other.
         self.layers = []
-        for i in xrange(num_layers):
-            layer = LSTMAttention(input_dim, hidden_dim, dropout=self.dropout)
+        for i in range(num_layers):
+            layer = LSTMAttention(input_dim, hidden_dim)
             self.layers.append(layer)
             input_dim = hidden_dim
 
@@ -191,7 +187,7 @@ class LSTMAttention(nn.Module):
             hy = outgate * F.tanh(cy)  # n_b x hidden_dim
             h_tilde, alpha = self.attention_layer(hy, ctx.transpose(0, 1))
 
-            return h_tilde, cy
+            return h_tilde, cy, alpha
 
         input = input.transpose(0, 1)
 
