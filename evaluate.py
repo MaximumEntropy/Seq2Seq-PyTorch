@@ -153,6 +153,18 @@ def evaluate_model(
             config['data']['max_trg_length']
         )
 
+        minibatch['input_src'] = Variable(
+            minibatch['input_src'].data, volatile=True, requires_grad=False
+        )
+
+        minibatch['input_trg'] = Variable(
+            minibatch['input_trg'].data, volatile=True, requires_grad=False
+        )
+
+        minibatch['output_trg'] = Variable(
+            minibatch['output_trg'].data, volatile=True, requires_grad=False
+        )
+
         # Initialize target with <s> for every sentence
         input_lines_trg = Variable(torch.LongTensor(
             [
@@ -191,10 +203,10 @@ def evaluate_model(
                 index = sentence_pred.index('</s>')
             else:
                 index = len(sentence_pred)
-            preds.append(sentence_pred[:index])
+            preds.append(sentence_pred[1:index])
 
             if verbose:
-                print(' '.join(sentence_pred[:index]))
+                print(' '.join(sentence_pred[1:index]))
 
             if '</s>' in sentence_real:
                 index = sentence_real.index('</s>')
@@ -267,19 +279,19 @@ def evaluate_autoencode_model(
                 index = sentence_pred.index('</s>')
             else:
                 index = len(sentence_pred)
-            preds.append(sentence_pred[:index + 1])
+            preds.append(sentence_pred[:index])
 
             if verbose:
-                print(' '.join(sentence_pred[:index + 1]))
+                print(' '.join(sentence_pred[:index]))
 
             if '</s>' in sentence_real:
                 index = sentence_real.index('</s>')
             else:
                 index = len(sentence_real)
             if verbose:
-                print(' '.join(sentence_real[:index + 1]))
+                print(' '.join(sentence_real[:index]))
             if verbose:
                 print('--------------------------------------')
-            ground_truths.append(sentence_real[:index + 1])
+            ground_truths.append(sentence_real[:index])
 
     return get_bleu(preds, ground_truths)

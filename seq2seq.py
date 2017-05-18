@@ -157,7 +157,31 @@ elif config['model']['seq2seq'] == 'fastattention':
         dropout=0.,
     ).cuda()
 
-if load_dir:
+if load_dir == 'auto':
+    checkpoints = os.listdir(save_dir)
+    epoch_max = -1
+    minibatch_max = -1
+    load_checkpoint = ''
+    for checkpoint in checkpoints:
+        checkpoint = checkpoint.split('__')
+        epoch = int(checkpoint[-2].split('_')[1])
+        minibatch = int(checkpoint[-1].split('_')[1].replace('.model', ''))
+        if epoch > epoch_max:
+            load_checkpoint = '__'.join(checkpoint)
+            epoch_max = epoch_max
+            minibatch_max = minibatch_max
+        elif epoch == epoch_max and minibatch > minibatch_max:
+            load_checkpoint = '__'.join(checkpoint)
+            minibatch_max = minibatch_max
+
+    if load_checkpoint != '':
+        logging.info('Loading last saved model : %s ' % (load_checkpoint))
+        model.load_state_dict(torch.load(
+            open(os.path.join(save_dir, load_checkpoint))
+        ))
+
+elif load_dir and not load_dir == 'auto':
+    logging.info('Loading model : %s ' % (load_dir))
     model.load_state_dict(torch.load(
         open(load_dir)
     ))
@@ -279,6 +303,6 @@ for i in range(1000):
         model.state_dict(),
         open(os.path.join(
             save_dir,
-            experiment_name + '__epoch_%d' % (i) + '.model'), 'wb'
+            experiment_name + '__epoch_%d__minibatch_%d' % (i, j) + '.model'), 'wb'
         )
     )
