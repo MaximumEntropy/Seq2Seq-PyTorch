@@ -39,15 +39,15 @@ class Seq2Seq(nn.Module):
             if self.bidirectional else src_hidden_dim
 
         self.src_embedding = nn.Embedding(
-            num_embedding=src_vocab_size,
-            embedding_dim=src_emb_dim,
-            padding_idx=self.pad_token_src,
+            src_vocab_size,
+            src_emb_dim,
+            self.pad_token_src,
         )
 
         self.trg_embedding = nn.Embedding(
-            num_embedding=trg_vocab_size,
-            embedding_dim=trg_emb_dim,
-            padding_idx=self.pad_token_trg,
+            trg_vocab_size,
+            trg_emb_dim,
+            self.pad_token_trg,
         )
 
         self.encoder = nn.LSTM(
