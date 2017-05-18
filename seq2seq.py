@@ -232,10 +232,7 @@ for i in range(1000):
             )
             losses = []
 
-        if (
-            config['management']['print_samples'] and
-            j % config['management']['print_samples'] == 0
-        ):
+        if j % config['management']['print_samples'] == 0 and j != 0:
             word_probs = model.decode(
                 decoder_logit
             ).data.cpu().numpy().argmax(axis=-1)
@@ -258,7 +255,7 @@ for i in range(1000):
                 logging.info('Real : %s ' % (' '.join(sentence_real)))
                 logging.info('===============================================')
 
-        if j % config['management']['checkpoint_freq'] == 0:
+        if j % config['management']['checkpoint_freq'] == 0 and j != 0:
 
             logging.info('Evaluating model on the validation set ...')
             bleu = evaluate_model(

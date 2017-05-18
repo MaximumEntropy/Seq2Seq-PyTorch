@@ -33,7 +33,7 @@ def bleu_stats(hypothesis, reference):
 
 def bleu(stats):
     """Compute BLEU given n-gram statistics."""
-    if len(filter(lambda x: x == 0, stats)) > 0:
+    if len(list(filter(lambda x: x == 0, stats))) > 0:
         return 0
     (c, r) = stats[:2]
     log_bleu_prec = sum(
