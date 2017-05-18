@@ -146,7 +146,7 @@ def evaluate_model(
     preds = []
     ground_truths = []
     for j in range(0, len(src_test['data']), config['data']['batch_size']):
-
+        print('[%d/%d]' % (j, len(src_test['data'])))
         minibatch = get_parallel_minibatch(
             src['data'], trg['data'], src['word2id'], trg['word2id'], j,
             config['data']['batch_size'], config['data']['max_src_length'], 
